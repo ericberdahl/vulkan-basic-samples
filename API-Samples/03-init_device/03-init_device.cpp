@@ -55,6 +55,88 @@ VkShaderModule create_shader(VkDevice device, const char* spvFileName) {
     return shaderModule;
 }
 
+VkDescriptorSetLayout create_sampler_descriptor_set(VkDevice device, int numSamplers) {
+    std::vector<VkDescriptorSetLayoutBinding> bindingSet;
+
+    VkDescriptorSetLayoutBinding binding = {};
+    binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+    binding.descriptorCount = 1;
+
+    for (int i = 0; i < numSamplers; ++i) {
+        binding.binding = i;
+        bindingSet.push_back(binding);
+    }
+
+    VkDescriptorSetLayoutCreateInfo createInfo = {};
+    createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    createInfo.bindingCount = bindingSet.size();
+    createInfo.pBindings = createInfo.bindingCount ? bindingSet.data() : NULL;
+
+    VkDescriptorSetLayout result;
+    VkResult U_ASSERT_ONLY res = vkCreateDescriptorSetLayout(device, &createInfo, NULL, &result);
+    assert(res == VK_SUCCESS);
+
+    return result;
+}
+
+VkDescriptorSetLayout create_buffer_descriptor_set(VkDevice device, int numBuffers) {
+    std::vector<VkDescriptorSetLayoutBinding> bindingSet;
+
+    VkDescriptorSetLayoutBinding binding = {};
+    binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    binding.descriptorCount = 1;
+
+    for (int i = 0; i < numBuffers; ++i) {
+        binding.binding = i;
+        bindingSet.push_back(binding);
+    }
+
+    VkDescriptorSetLayoutCreateInfo createInfo = {};
+    createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    createInfo.bindingCount = bindingSet.size();
+    createInfo.pBindings = createInfo.bindingCount ? bindingSet.data() : NULL;
+
+    VkDescriptorSetLayout result;
+    VkResult U_ASSERT_ONLY res = vkCreateDescriptorSetLayout(device, &createInfo, NULL, &result);
+    assert(res == VK_SUCCESS);
+
+    return result;
+}
+
+VkPipelineLayout create_pipeline_layout(VkDevice device, const std::vector<VkDescriptorSetLayout>& descriptorSets) {
+    VkPipelineLayoutCreateInfo createInfo = {};
+    createInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    createInfo.setLayoutCount = descriptorSets.size();
+    createInfo.pSetLayouts = createInfo.setLayoutCount ? descriptorSets.data() : NULL;
+
+    VkPipelineLayout result;
+    VkResult U_ASSERT_ONLY res = vkCreatePipelineLayout(device, &createInfo, NULL, &result);
+    assert(res == VK_SUCCESS);
+
+    return result;
+}
+
+VkPipeline create_pipeline(VkDevice device, VkShaderModule shaderModule, const char* entryName, VkPipelineLayout layout) {
+    VkComputePipelineCreateInfo createInfo = {};
+    createInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    createInfo.layout = layout;
+    createInfo.basePipelineHandle = VK_NULL_HANDLE;
+    createInfo.basePipelineIndex = -1;
+
+    createInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    createInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    createInfo.stage.module = shaderModule;
+    createInfo.stage.pName = entryName;
+
+    VkPipeline result;
+    VkResult U_ASSERT_ONLY res = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &createInfo, NULL, &result);
+    assert(res == VK_SUCCESS);
+
+    return result;
+}
+
 int sample_main(int argc, char *argv[]) {
     struct sample_info info = {};
     init_global_layer_properties(info);
@@ -109,6 +191,15 @@ int sample_main(int argc, char *argv[]) {
 
     VkShaderModule compute_shader = create_shader(device, "fills.spv");
 
+    std::vector<VkDescriptorSetLayout> descriptorSets;
+    descriptorSets.push_back(create_sampler_descriptor_set(device, 4));
+    descriptorSets.push_back(create_buffer_descriptor_set(device, 2));
+
+    VkPipelineLayout pipelineLayout = create_pipeline_layout(device, descriptorSets);
+    VkPipeline pipeline = create_pipeline(device, compute_shader, "FillWithColorKernel", pipelineLayout);
+
+    vkDestroyPipeline(device, pipeline, NULL);
+    vkDestroyShaderModule(device, compute_shader, NULL);
     vkDestroyDevice(device, NULL);
 
     /* VULKAN_KEY_END */
