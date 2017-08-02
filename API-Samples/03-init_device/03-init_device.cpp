@@ -58,6 +58,8 @@ int sample_main(int argc, char *argv[]) {
     assert(found);
     assert(info.queue_family_count >= 1);
 
+    info.device_extension_names.push_back("VK_KHR_variable_pointers");
+
     float queue_priorities[1] = {0.0};
     queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
     queue_info.pNext = NULL;
@@ -69,8 +71,8 @@ int sample_main(int argc, char *argv[]) {
     device_info.pNext = NULL;
     device_info.queueCreateInfoCount = 1;
     device_info.pQueueCreateInfos = &queue_info;
-    device_info.enabledExtensionCount = 0;
-    device_info.ppEnabledExtensionNames = NULL;
+    device_info.enabledExtensionCount = info.device_extension_names.size();
+    device_info.ppEnabledExtensionNames = device_info.enabledExtensionCount ? info.device_extension_names.data() : NULL;
     device_info.enabledLayerCount = 0;
     device_info.ppEnabledLayerNames = NULL;
     device_info.pEnabledFeatures = NULL;
