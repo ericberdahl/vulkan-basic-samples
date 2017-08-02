@@ -31,15 +31,15 @@ create and destroy a Vulkan physical device
 #include <util_init.hpp>
 
 VkShaderModule create_shader(VkDevice device, const char* spvFileName) {
-    FILE* spv_file = AndroidFopen(spvFileName, "rb");
+    std::FILE* spv_file = AndroidFopen(spvFileName, "rb");
 
-    fseek(spv_file, 0, SEEK_END);
+    std::fseek(spv_file, 0, SEEK_END);
     std::vector<char> spvModule(ftell(spv_file));
 
-    fseek(spv_file, 0, SEEK_SET);
-    fread(spvModule.data(), 1, spvModule.size(), spv_file);
+    std::fseek(spv_file, 0, SEEK_SET);
+    std::fread(spvModule.data(), 1, spvModule.size(), spv_file);
 
-    fclose(spv_file);
+    std::fclose(spv_file);
 
     VkShaderModuleCreateInfo shaderModuleCreateInfo = {};
     shaderModuleCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
