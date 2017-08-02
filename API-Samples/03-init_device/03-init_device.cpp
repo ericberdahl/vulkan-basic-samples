@@ -30,14 +30,16 @@ create and destroy a Vulkan physical device
 #include <fstream>
 #include <util_init.hpp>
 
-VkShaderModule create_shader(VkDevice device, const char* spvFilePath) {
-    std::ifstream spv_file(spvFilePath, std::ios_base::ate | std::ios_base::binary);
-    assert(spv_file.good());
+VkShaderModule create_shader(VkDevice device, const char* spvFileName) {
+    FILE* spv_file = AndroidFopen(spvFileName, "rb");
 
-    std::vector<char> spvModule(spv_file.tellg());
-    spv_file.seekg(0, std::ios::beg);
-    spv_file.read(spvModule.data(), spvModule.size());
-    spv_file.close();
+    fseek(spv_file, 0, SEEK_END);
+    std::vector<char> spvModule(ftell(spv_file));
+
+    fseek(spv_file, 0, SEEK_SET);
+    fread(spvModule.data(), 1, spvModule.size(), spv_file);
+
+    fclose(spv_file);
 
     VkShaderModuleCreateInfo shaderModuleCreateInfo = {};
     shaderModuleCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -105,7 +107,7 @@ int sample_main(int argc, char *argv[]) {
     VkResult U_ASSERT_ONLY res = vkCreateDevice(info.gpus[0], &device_info, NULL, &device);
     assert(res == VK_SUCCESS);
 
-    VkShaderModule compute_shader = create_shader(device, "/sdcard/Fills.spv");
+    VkShaderModule compute_shader = create_shader(device, "fills.spv");
 
     vkDestroyDevice(device, NULL);
 
