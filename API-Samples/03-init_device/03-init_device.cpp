@@ -49,7 +49,7 @@ int sample_main(int argc, char *argv[]) {
 
     bool found = false;
     for (unsigned int i = 0; i < info.queue_family_count; i++) {
-        if (info.queue_props[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) {
+        if (info.queue_props[i].queueFlags & VK_QUEUE_COMPUTE_BIT) {
             queue_info.queueFamilyIndex = i;
             found = true;
             break;
