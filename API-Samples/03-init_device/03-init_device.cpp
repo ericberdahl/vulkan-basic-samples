@@ -27,7 +27,31 @@ create and destroy a Vulkan physical device
 #include <iostream>
 #include <cassert>
 #include <cstdlib>
+#include <fstream>
 #include <util_init.hpp>
+
+VkShaderModule create_shader(VkDevice device, const char* spvFilePath) {
+    std::ifstream spv_file(spvFilePath, std::ios_base::ate | std::ios_base::binary);
+    assert(spv_file.good());
+
+    std::vector<char> spvModule(spv_file.tellg());
+    spv_file.seekg(0, std::ios::beg);
+    spv_file.read(spvModule.data(), spvModule.size());
+    spv_file.close();
+
+    VkShaderModuleCreateInfo shaderModuleCreateInfo = {};
+    shaderModuleCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    shaderModuleCreateInfo.pNext = NULL;
+    shaderModuleCreateInfo.flags = 0;
+    shaderModuleCreateInfo.codeSize = spvModule.size();
+    shaderModuleCreateInfo.pCode = reinterpret_cast<const uint32_t*>(spvModule.data());
+
+    VkShaderModule shaderModule;
+    VkResult U_ASSERT_ONLY res = vkCreateShaderModule(device, &shaderModuleCreateInfo, NULL, &shaderModule);
+    assert(res == VK_SUCCESS);
+
+    return shaderModule;
+}
 
 int sample_main(int argc, char *argv[]) {
     struct sample_info info = {};
@@ -80,6 +104,8 @@ int sample_main(int argc, char *argv[]) {
     VkDevice device;
     VkResult U_ASSERT_ONLY res = vkCreateDevice(info.gpus[0], &device_info, NULL, &device);
     assert(res == VK_SUCCESS);
+
+    VkShaderModule compute_shader = create_shader(device, "/sdcard/Fills.spv");
 
     vkDestroyDevice(device, NULL);
 
