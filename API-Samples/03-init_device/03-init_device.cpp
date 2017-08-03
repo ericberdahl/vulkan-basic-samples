@@ -34,10 +34,14 @@ VkShaderModule create_shader(VkDevice device, const char* spvFileName) {
     std::FILE* spv_file = AndroidFopen(spvFileName, "rb");
 
     std::fseek(spv_file, 0, SEEK_END);
-    std::vector<char> spvModule(ftell(spv_file));
+    // Use vector of uint32_t to ensure alignment is satisfied.
+    const auto num_bytes = std::ftell(spv_file);
+    assert(0 == (num_bytes & sizeof(uint32_t)));
+    const auto num_words = (num_bytes + sizeof(uint32_t) - 1) / sizeof(uint32_t);
+    std::vector<uint32_t> spvModule(num_words);
 
     std::fseek(spv_file, 0, SEEK_SET);
-    std::fread(spvModule.data(), 1, spvModule.size(), spv_file);
+    std::fread(spvModule.data(), 1, num_bytes, spv_file);
 
     std::fclose(spv_file);
 
@@ -45,8 +49,8 @@ VkShaderModule create_shader(VkDevice device, const char* spvFileName) {
     shaderModuleCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
     shaderModuleCreateInfo.pNext = NULL;
     shaderModuleCreateInfo.flags = 0;
-    shaderModuleCreateInfo.codeSize = spvModule.size();
-    shaderModuleCreateInfo.pCode = reinterpret_cast<const uint32_t*>(spvModule.data());
+    shaderModuleCreateInfo.codeSize = num_bytes;
+    shaderModuleCreateInfo.pCode = spvModule.data();
 
     VkShaderModule shaderModule;
     VkResult U_ASSERT_ONLY res = vkCreateShaderModule(device, &shaderModuleCreateInfo, NULL, &shaderModule);
