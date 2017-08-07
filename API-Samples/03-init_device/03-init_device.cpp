@@ -30,6 +30,36 @@ create and destroy a Vulkan physical device
 #include <fstream>
 #include <util_init.hpp>
 
+VKAPI_ATTR VkBool32 VKAPI_CALL dbgFunc(VkDebugReportFlagsEXT msgFlags, VkDebugReportObjectTypeEXT objType, uint64_t srcObject,
+                                       size_t location, int32_t msgCode, const char *pLayerPrefix, const char *pMsg,
+                                       void *pUserData) {
+    std::ostringstream message;
+
+    if (msgFlags & VK_DEBUG_REPORT_ERROR_BIT_EXT) {
+        message << "ERROR: ";
+    } else if (msgFlags & VK_DEBUG_REPORT_WARNING_BIT_EXT) {
+        message << "WARNING: ";
+    } else if (msgFlags & VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT) {
+        message << "PERFORMANCE WARNING: ";
+    } else if (msgFlags & VK_DEBUG_REPORT_INFORMATION_BIT_EXT) {
+        message << "INFO: ";
+    } else if (msgFlags & VK_DEBUG_REPORT_DEBUG_BIT_EXT) {
+        message << "DEBUG: ";
+    }
+    message << "[" << pLayerPrefix << "] Code " << msgCode << " : " << pMsg;
+
+    std::cout << message.str() << std::endl;
+
+    /*
+     * false indicates that layer should not bail-out of an
+     * API call that had validation failures. This may mean that the
+     * app dies inside the driver due to invalid parameter(s).
+     * That's what would happen without validation layers, so we'll
+     * keep that behavior here.
+     */
+    return false;
+}
+
 void init_compute_queue_family_index(struct sample_info &info) {
     /* This routine simply finds a compute queue for a later vkCreateDevice.
      */
@@ -157,7 +187,10 @@ void init_compute_pipeline(struct sample_info &info, VkShaderModule shaderModule
 int sample_main(int argc, char *argv[]) {
     struct sample_info info = {};
     init_global_layer_properties(info);
+
+    info.instance_extension_names.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
     init_instance(info, "vulkansamples_device");
+
     init_enumerate_device(info);
     init_compute_queue_family_index(info);
 
@@ -165,6 +198,8 @@ int sample_main(int argc, char *argv[]) {
     info.device_extension_names.push_back("VK_KHR_storage_buffer_storage_class");
     info.device_extension_names.push_back("VK_KHR_variable_pointers");
     init_device(info);
+
+    init_debug_report_callback(info, dbgFunc);
 
     // We cannot use the shader support built into the sample framework because it is too tightly
     // tied to a graphics pipeline. Instead, track our compute shader externally.
@@ -189,6 +224,7 @@ int sample_main(int argc, char *argv[]) {
     // tightly tied to the graphics pipeline (e.g. hard-coding the number and type of shaders).
     vkDestroyShaderModule(info.device, compute_shader, NULL);
 
+    destroy_debug_report_callback(info);
     destroy_device(info);
     destroy_instance(info);
 
