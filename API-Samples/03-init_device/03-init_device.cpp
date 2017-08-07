@@ -170,6 +170,7 @@ int sample_main(int argc, char *argv[]) {
     assert(found);
     assert(info.queue_family_count >= 1);
 
+    info.device_extension_names.push_back("VK_KHR_storage_buffer_storage_class");
     info.device_extension_names.push_back("VK_KHR_variable_pointers");
 
     float queue_priorities[1] = {0.0};
