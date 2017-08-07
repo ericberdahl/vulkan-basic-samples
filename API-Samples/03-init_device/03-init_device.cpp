@@ -52,7 +52,7 @@ VkShaderModule create_shader(VkDevice device, const char* spvFileName) {
     shaderModuleCreateInfo.codeSize = num_bytes;
     shaderModuleCreateInfo.pCode = spvModule.data();
 
-    VkShaderModule shaderModule;
+    VkShaderModule shaderModule = VK_NULL_HANDLE;
     VkResult U_ASSERT_ONLY res = vkCreateShaderModule(device, &shaderModuleCreateInfo, NULL, &shaderModule);
     assert(res == VK_SUCCESS);
 
@@ -77,7 +77,7 @@ VkDescriptorSetLayout create_sampler_descriptor_set(VkDevice device, int numSamp
     createInfo.bindingCount = bindingSet.size();
     createInfo.pBindings = createInfo.bindingCount ? bindingSet.data() : NULL;
 
-    VkDescriptorSetLayout result;
+    VkDescriptorSetLayout result = VK_NULL_HANDLE;
     VkResult U_ASSERT_ONLY res = vkCreateDescriptorSetLayout(device, &createInfo, NULL, &result);
     assert(res == VK_SUCCESS);
 
@@ -102,7 +102,7 @@ VkDescriptorSetLayout create_buffer_descriptor_set(VkDevice device, int numBuffe
     createInfo.bindingCount = bindingSet.size();
     createInfo.pBindings = createInfo.bindingCount ? bindingSet.data() : NULL;
 
-    VkDescriptorSetLayout result;
+    VkDescriptorSetLayout result = VK_NULL_HANDLE;
     VkResult U_ASSERT_ONLY res = vkCreateDescriptorSetLayout(device, &createInfo, NULL, &result);
     assert(res == VK_SUCCESS);
 
@@ -115,7 +115,7 @@ VkPipelineLayout create_pipeline_layout(VkDevice device, const std::vector<VkDes
     createInfo.setLayoutCount = descriptorSets.size();
     createInfo.pSetLayouts = createInfo.setLayoutCount ? descriptorSets.data() : NULL;
 
-    VkPipelineLayout result;
+    VkPipelineLayout result = VK_NULL_HANDLE;
     VkResult U_ASSERT_ONLY res = vkCreatePipelineLayout(device, &createInfo, NULL, &result);
     assert(res == VK_SUCCESS);
 
@@ -134,7 +134,7 @@ VkPipeline create_pipeline(VkDevice device, VkShaderModule shaderModule, const c
     createInfo.stage.module = shaderModule;
     createInfo.stage.pName = entryName;
 
-    VkPipeline result;
+    VkPipeline result = VK_NULL_HANDLE;
     VkResult U_ASSERT_ONLY res = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &createInfo, NULL, &result);
     assert(res == VK_SUCCESS);
 
@@ -190,7 +190,7 @@ int sample_main(int argc, char *argv[]) {
     device_info.ppEnabledLayerNames = NULL;
     device_info.pEnabledFeatures = NULL;
 
-    VkDevice device;
+    VkDevice device = VK_NULL_HANDLE;
     VkResult U_ASSERT_ONLY res = vkCreateDevice(info.gpus[0], &device_info, NULL, &device);
     assert(res == VK_SUCCESS);
 
