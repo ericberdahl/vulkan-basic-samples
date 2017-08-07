@@ -172,8 +172,6 @@ void init_compute_pipeline(struct sample_info &info, VkShaderModule shaderModule
     VkComputePipelineCreateInfo createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     createInfo.layout = info.pipeline_layout;
-    createInfo.basePipelineHandle = VK_NULL_HANDLE;
-    createInfo.basePipelineIndex = -1;
 
     createInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     createInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
