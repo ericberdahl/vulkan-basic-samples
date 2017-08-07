@@ -36,7 +36,7 @@ VkShaderModule create_shader(VkDevice device, const char* spvFileName) {
     std::fseek(spv_file, 0, SEEK_END);
     // Use vector of uint32_t to ensure alignment is satisfied.
     const auto num_bytes = std::ftell(spv_file);
-    assert(0 == (num_bytes & sizeof(uint32_t)));
+    assert(0 == (num_bytes % sizeof(uint32_t)));
     const auto num_words = (num_bytes + sizeof(uint32_t) - 1) / sizeof(uint32_t);
     std::vector<uint32_t> spvModule(num_words);
 
