@@ -30,7 +30,21 @@ create and destroy a Vulkan physical device
 #include <fstream>
 #include <util_init.hpp>
 
-VkShaderModule create_shader(VkDevice device, const char* spvFileName) {
+void init_compute_queue_family_index(struct sample_info &info) {
+    /* This routine simply finds a compute queue for a later vkCreateDevice.
+     */
+    bool found = false;
+    for (unsigned int i = 0; i < info.queue_props.size(); i++) {
+        if (info.queue_props[i].queueFlags & VK_QUEUE_COMPUTE_BIT) {
+            info.graphics_queue_family_index = i;
+            found = true;
+            break;
+        }
+    }
+    assert(found);
+}
+
+VkShaderModule create_shader(struct sample_info &info, const char* spvFileName) {
     std::FILE* spv_file = AndroidFopen(spvFileName, "rb");
 
     std::fseek(spv_file, 0, SEEK_END);
@@ -39,6 +53,7 @@ VkShaderModule create_shader(VkDevice device, const char* spvFileName) {
     assert(0 == (num_bytes % sizeof(uint32_t)));
     const auto num_words = (num_bytes + sizeof(uint32_t) - 1) / sizeof(uint32_t);
     std::vector<uint32_t> spvModule(num_words);
+    assert(num_bytes == (spvModule.size() * sizeof(uint32_t)));
 
     std::fseek(spv_file, 0, SEEK_SET);
     std::fread(spvModule.data(), 1, num_bytes, spv_file);
@@ -53,7 +68,7 @@ VkShaderModule create_shader(VkDevice device, const char* spvFileName) {
     shaderModuleCreateInfo.pCode = spvModule.data();
 
     VkShaderModule shaderModule = VK_NULL_HANDLE;
-    VkResult U_ASSERT_ONLY res = vkCreateShaderModule(device, &shaderModuleCreateInfo, NULL, &shaderModule);
+    VkResult U_ASSERT_ONLY res = vkCreateShaderModule(info.device, &shaderModuleCreateInfo, NULL, &shaderModule);
     assert(res == VK_SUCCESS);
 
     return shaderModule;
@@ -109,23 +124,24 @@ VkDescriptorSetLayout create_buffer_descriptor_set(VkDevice device, int numBuffe
     return result;
 }
 
-VkPipelineLayout create_pipeline_layout(VkDevice device, const std::vector<VkDescriptorSetLayout>& descriptorSets) {
+void init_compute_pipeline_layout(struct sample_info &info) {
+    info.desc_layout.resize(0);
+    info.desc_layout.push_back(create_sampler_descriptor_set(info.device, 4));
+    info.desc_layout.push_back(create_buffer_descriptor_set(info.device, 2));
+
     VkPipelineLayoutCreateInfo createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    createInfo.setLayoutCount = descriptorSets.size();
-    createInfo.pSetLayouts = createInfo.setLayoutCount ? descriptorSets.data() : NULL;
+    createInfo.setLayoutCount = info.desc_layout.size();
+    createInfo.pSetLayouts = createInfo.setLayoutCount ? info.desc_layout.data() : NULL;
 
-    VkPipelineLayout result = VK_NULL_HANDLE;
-    VkResult U_ASSERT_ONLY res = vkCreatePipelineLayout(device, &createInfo, NULL, &result);
+    VkResult U_ASSERT_ONLY res = vkCreatePipelineLayout(info.device, &createInfo, NULL, &info.pipeline_layout);
     assert(res == VK_SUCCESS);
-
-    return result;
 }
 
-VkPipeline create_pipeline(VkDevice device, VkShaderModule shaderModule, const char* entryName, VkPipelineLayout layout) {
+void init_compute_pipeline(struct sample_info &info, VkShaderModule shaderModule, const char* entryName) {
     VkComputePipelineCreateInfo createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    createInfo.layout = layout;
+    createInfo.layout = info.pipeline_layout;
     createInfo.basePipelineHandle = VK_NULL_HANDLE;
     createInfo.basePipelineIndex = -1;
 
@@ -134,81 +150,46 @@ VkPipeline create_pipeline(VkDevice device, VkShaderModule shaderModule, const c
     createInfo.stage.module = shaderModule;
     createInfo.stage.pName = entryName;
 
-    VkPipeline result = VK_NULL_HANDLE;
-    VkResult U_ASSERT_ONLY res = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &createInfo, NULL, &result);
+    VkResult U_ASSERT_ONLY res = vkCreateComputePipelines(info.device, VK_NULL_HANDLE, 1, &createInfo, NULL, &info.pipeline);
     assert(res == VK_SUCCESS);
-
-    return result;
 }
 
 int sample_main(int argc, char *argv[]) {
     struct sample_info info = {};
     init_global_layer_properties(info);
     init_instance(info, "vulkansamples_device");
-
     init_enumerate_device(info);
+    init_compute_queue_family_index(info);
 
-    /* VULKAN_KEY_START */
-
-    VkDeviceQueueCreateInfo queue_info = {};
-
-    vkGetPhysicalDeviceQueueFamilyProperties(info.gpus[0], &info.queue_family_count, NULL);
-    assert(info.queue_family_count >= 1);
-
-    info.queue_props.resize(info.queue_family_count);
-    vkGetPhysicalDeviceQueueFamilyProperties(info.gpus[0], &info.queue_family_count, info.queue_props.data());
-    assert(info.queue_family_count >= 1);
-
-    bool found = false;
-    for (unsigned int i = 0; i < info.queue_family_count; i++) {
-        if (info.queue_props[i].queueFlags & VK_QUEUE_COMPUTE_BIT) {
-            queue_info.queueFamilyIndex = i;
-            found = true;
-            break;
-        }
-    }
-    assert(found);
-    assert(info.queue_family_count >= 1);
-
+    // The clspv solution we're using requires two Vulkan extensions to be enabled.
     info.device_extension_names.push_back("VK_KHR_storage_buffer_storage_class");
     info.device_extension_names.push_back("VK_KHR_variable_pointers");
+    init_device(info);
 
-    float queue_priorities[1] = {0.0};
-    queue_info.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
-    queue_info.pNext = NULL;
-    queue_info.queueCount = 1;
-    queue_info.pQueuePriorities = queue_priorities;
+    // We cannot use the shader support built into the sample framework because it is too tightly
+    // tied to a graphics pipeline. Instead, track our compute shader externally.
+    const VkShaderModule compute_shader = create_shader(info, "fills.spv");
 
-    VkDeviceCreateInfo device_info = {};
-    device_info.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
-    device_info.pNext = NULL;
-    device_info.queueCreateInfoCount = 1;
-    device_info.pQueueCreateInfos = &queue_info;
-    device_info.enabledExtensionCount = info.device_extension_names.size();
-    device_info.ppEnabledExtensionNames = device_info.enabledExtensionCount ? info.device_extension_names.data() : NULL;
-    device_info.enabledLayerCount = 0;
-    device_info.ppEnabledLayerNames = NULL;
-    device_info.pEnabledFeatures = NULL;
+    init_compute_pipeline_layout(info);
+    init_compute_pipeline(info, compute_shader, "FillWithColorKernel");
 
-    VkDevice device = VK_NULL_HANDLE;
-    VkResult U_ASSERT_ONLY res = vkCreateDevice(info.gpus[0], &device_info, NULL, &device);
-    assert(res == VK_SUCCESS);
+    //
+    // Clean up
+    //
 
-    VkShaderModule compute_shader = create_shader(device, "fills.spv");
+    destroy_pipeline(info);
 
-    std::vector<VkDescriptorSetLayout> descriptorSets;
-    descriptorSets.push_back(create_sampler_descriptor_set(device, 4));
-    descriptorSets.push_back(create_buffer_descriptor_set(device, 2));
+    // Cannot use the descriptor set and pipeline layout destruction built into the sample framework
+    // because it is too tightly tied to the graphics pipeline (e.g. hard-coding the number of
+    // descriptor set layouts).
+    for (int i = 0; i < info.desc_layout.size(); i++) vkDestroyDescriptorSetLayout(info.device, info.desc_layout[i], NULL);
+    vkDestroyPipelineLayout(info.device, info.pipeline_layout, NULL);
 
-    VkPipelineLayout pipelineLayout = create_pipeline_layout(device, descriptorSets);
-    VkPipeline pipeline = create_pipeline(device, compute_shader, "FillWithColorKernel", pipelineLayout);
+    // Cannot use the shader module desctruction built into the sampel framework because it is too
+    // tightly tied to the graphics pipeline (e.g. hard-coding the number and type of shaders).
+    vkDestroyShaderModule(info.device, compute_shader, NULL);
 
-    vkDestroyPipeline(device, pipeline, NULL);
-    vkDestroyShaderModule(device, compute_shader, NULL);
-    vkDestroyDevice(device, NULL);
-
-    /* VULKAN_KEY_END */
-
+    destroy_device(info);
     destroy_instance(info);
 
     return 0;
