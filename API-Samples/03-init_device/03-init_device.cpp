@@ -134,6 +134,48 @@ void my_init_descriptor_set(struct sample_info &info) {
     assert(res == VK_SUCCESS);
 }
 
+void update_descriptor_sets(struct sample_info &info, const std::vector<VkSampler>& samplers, const std::vector<buffer>& buffers) {
+    VkWriteDescriptorSet baseWriteSet = {};
+    baseWriteSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    baseWriteSet.descriptorCount = 1;
+
+    std::vector<VkWriteDescriptorSet> writeSets;
+
+    // Update the samplers
+
+    VkDescriptorImageInfo baseImageInfo = {};
+    std::vector<VkDescriptorImageInfo> imageInfo(samplers.size(), baseImageInfo);
+    for (int i = 0; i < samplers.size(); ++i) imageInfo[i].sampler = samplers[i];
+
+    baseWriteSet.dstSet = info.desc_set[0];
+    baseWriteSet.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+    writeSets.resize(samplers.size(), baseWriteSet);
+    for (int i = 0; i < samplers.size(); ++i) {
+        writeSets[i].dstBinding = i;
+        writeSets[i].pImageInfo = &imageInfo[i];
+    }
+
+    // Update the buffers
+
+    VkDescriptorBufferInfo baseBufferInfo = {};
+    baseBufferInfo.offset = 0;
+    baseBufferInfo.range = VK_WHOLE_SIZE;
+    std::vector<VkDescriptorBufferInfo> bufferInfo(buffers.size(), baseBufferInfo);
+    for (int i = 0; i < buffers.size(); ++i) bufferInfo[i].buffer = buffers[i].buf;
+
+    baseWriteSet.dstSet = info.desc_set[1];
+    baseWriteSet.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    auto prevSize = writeSets.size();
+    writeSets.resize(prevSize + buffers.size(), baseWriteSet);
+    for (int i = 0; i < buffers.size(); ++i) {
+        writeSets[i + prevSize].dstBinding = i;
+        writeSets[i + prevSize].pBufferInfo = &bufferInfo[i];
+    }
+
+    vkUpdateDescriptorSets(info.device, writeSets.size(), writeSets.data(), 0, NULL);
+
+}
+
 VkShaderModule create_shader(struct sample_info &info, const char* spvFileName) {
     std::FILE* spv_file = AndroidFopen(spvFileName, "rb");
 
@@ -268,6 +310,17 @@ void init_compute_pipeline_layout(struct sample_info &info, int num_samplers, in
     assert(res == VK_SUCCESS);
 }
 
+void submit_command(struct sample_info &info) {
+    VkSubmitInfo submitInfo = {};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &info.cmd;
+
+    VkResult U_ASSERT_ONLY res = vkQueueSubmit(info.graphics_queue, 1, &submitInfo, VK_NULL_HANDLE);
+    assert(res == VK_SUCCESS);
+
+}
+
 void init_compute_pipeline(struct sample_info &info, VkShaderModule shaderModule, const char* entryName) {
     VkComputePipelineCreateInfo createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
@@ -310,8 +363,10 @@ int sample_main(int argc, char *argv[]) {
     info.device_extension_names.push_back("VK_KHR_storage_buffer_storage_class");
     info.device_extension_names.push_back("VK_KHR_variable_pointers");
     init_device(info);
+    init_device_queue(info);
 
     init_debug_report_callback(info, dbgFunc);
+
 
     init_command_pool(info);
     init_command_buffer(info);
@@ -351,17 +406,42 @@ int sample_main(int argc, char *argv[]) {
 
     my_init_descriptor_set(info);
 
+    update_descriptor_sets(info, samplers, buffers);
+
     execute_begin_command_buffer(info);
         vkCmdBindPipeline(info.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, info.pipeline);
 
-        // bind descriptor sets
+        vkCmdBindDescriptorSets(info.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                info.pipeline_layout,
+                                0,
+                                info.desc_set.size(), info.desc_set.data(),
+                                0, NULL);
 
         // NOTE: Current logic is inefficient, 1 work item per work group
         vkCmdDispatch(info.cmd, buffer_width, buffer_height, 1);
     execute_end_command_buffer(info);
 
-    // invoke kernel
+    submit_command(info);
+    vkQueueWaitIdle(info.graphics_queue);
+
     // examine result buffer contents
+    res = vkMapMemory(info.device, buffers[0].mem, 0, VK_WHOLE_SIZE, 0, &data);
+    assert(res == VK_SUCCESS);
+    {
+        const float4* pixels = static_cast<const float4*>(data);
+
+        const float4* row = pixels;
+        for (int r = 0; r < scalar_args.inHeight; ++r, row += scalar_args.inPitch) {
+            const float4* p = row;
+            for (int c = 0; c < scalar_args.inWidth; ++c, ++p) {
+                if (p->x != 1.0f || p->y != 0 || p->z != 0 || p->w != 1.0f) {
+                    LOGE("pixels{row:%d, col%d} = {x=%f, y=%f, z=%f, w=%f}", r, c, p->x, p->y, p->z, p->w);
+                }
+            }
+        }
+    }
+    vkUnmapMemory(info.device, buffers[0].mem);
+    data = NULL;
 
     //
     // Clean up
