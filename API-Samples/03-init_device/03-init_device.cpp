@@ -201,7 +201,7 @@ int sample_main(int argc, char *argv[]) {
 
     // We cannot use the shader support built into the sample framework because it is too tightly
     // tied to a graphics pipeline. Instead, track our compute shader externally.
-    const VkShaderModule compute_shader = create_shader(info, "fills.spv");
+    const VkShaderModule compute_shader = create_shader(info, "fills-opt.spv");
 
     init_compute_pipeline_layout(info);
     init_compute_pipeline(info, compute_shader, "FillWithColorKernel");
