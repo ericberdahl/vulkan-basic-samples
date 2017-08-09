@@ -31,6 +31,36 @@ create and destroy a Vulkan physical device
 #include <fstream>
 #include <util_init.hpp>
 
+struct buffer {
+    VkBuffer        buf;
+    VkDeviceMemory  mem;
+};
+
+struct float4 {
+    float x;
+    float y;
+    float z;
+    float w;
+};
+
+struct fill_kernel_scalar_args {
+    int     inPitch;        // offset 0
+    int     inDeviceFormat; // DevicePixelFormat offset 4
+    int     inOffsetX;      // offset 8
+    int     inOffsetY;      // offset 12
+    int     inWidth;        // offset 16
+    int     inHeight;       // offset 20
+    int     unused[2];      // offset 24, 28
+    float4  inColor;        // offset 32
+};
+static_assert(0 == offsetof(fill_kernel_scalar_args, inPitch), "inPitch offset incorrect");
+static_assert(4 == offsetof(fill_kernel_scalar_args, inDeviceFormat), "inDeviceFormat offset incorrect");
+static_assert(8 == offsetof(fill_kernel_scalar_args, inOffsetX), "inOffsetX offset incorrect");
+static_assert(12 == offsetof(fill_kernel_scalar_args, inOffsetY), "inOffsetY offset incorrect");
+static_assert(16 == offsetof(fill_kernel_scalar_args, inWidth), "inWidth offset incorrect");
+static_assert(20 == offsetof(fill_kernel_scalar_args, inHeight), "inHeight offset incorrect");
+static_assert(32 == offsetof(fill_kernel_scalar_args, inColor), "inColor offset incorrect");
+
 VKAPI_ATTR VkBool32 VKAPI_CALL dbgFunc(VkDebugReportFlagsEXT msgFlags, VkDebugReportObjectTypeEXT objType, uint64_t srcObject,
                                        size_t location, int32_t msgCode, const char *pLayerPrefix, const char *pMsg,
                                        void *pUserData) {
@@ -155,6 +185,46 @@ VkDescriptorSetLayout create_buffer_descriptor_set(VkDevice device, int numBuffe
     return result;
 }
 
+buffer create_buffer(struct sample_info &info, VkDeviceSize num_bytes) {
+    buffer result = {};
+
+    // Allocate the buffer
+    VkBufferCreateInfo buf_info = {};
+    buf_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    buf_info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    buf_info.size = num_bytes;
+    buf_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VkResult U_ASSERT_ONLY res = vkCreateBuffer(info.device, &buf_info, NULL, &result.buf);
+    assert(res == VK_SUCCESS);
+
+    // Find out what we need in order to allocate memory for the buffer
+    VkMemoryRequirements mem_reqs = {};
+    vkGetBufferMemoryRequirements(info.device, result.buf, &mem_reqs);
+
+    // Allocate memory for the buffer
+    VkMemoryAllocateInfo alloc_info = {};
+    alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc_info.allocationSize = mem_reqs.size;
+    bool U_ASSERT_ONLY pass = memory_type_from_properties(info, mem_reqs.memoryTypeBits,
+                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
+                                       &alloc_info.memoryTypeIndex);
+    assert(pass && "No mappable, coherent memory");
+    res = vkAllocateMemory(info.device, &alloc_info, NULL, &result.mem);
+    assert(res == VK_SUCCESS);
+
+    // Bind the memory to the buffer object
+    res = vkBindBufferMemory(info.device, result.buf, result.mem, 0);
+    assert(res == VK_SUCCESS);
+
+    return result;
+}
+
+void destroy_buffer(struct sample_info &info, const buffer& buf) {
+    vkDestroyBuffer(info.device, buf.buf, NULL);
+    vkFreeMemory(info.device, buf.mem, NULL);
+}
+
 void init_compute_pipeline_layout(struct sample_info &info, int num_samplers, int num_buffers) {
     info.desc_layout.resize(0);
     info.desc_layout.push_back(create_sampler_descriptor_set(info.device, num_samplers));
@@ -184,8 +254,19 @@ void init_compute_pipeline(struct sample_info &info, VkShaderModule shaderModule
 }
 
 int sample_main(int argc, char *argv[]) {
-    const int num_shaders = 4;
-    const int num_buffers = 2;
+    const int buffer_height = 32;
+    const int buffer_width = 32;
+    const fill_kernel_scalar_args scalar_args = {
+            buffer_width,               // inPitch
+            1,                          // inDeviceFormat - kDevicePixelFormat_BGRA_4444_32f
+            0,                          // inOffsetX
+            0,                          // inOffsetY
+            buffer_width,               // inWidth
+            buffer_height,              // inHeight
+            {0,0},                      // unused
+            { 1.0f, 0.0f, 0.0f, 1.0f }  // inColor
+    };
+    const std::size_t buffer_size = scalar_args.inPitch * scalar_args.inHeight * sizeof(float4);
 
     struct sample_info info = {};
     init_global_layer_properties(info);
@@ -211,13 +292,34 @@ int sample_main(int argc, char *argv[]) {
     std::for_each(samplers.begin(), samplers.end(), [&info](VkSampler& s) { init_sampler(info, s); });
 
     // create memory buffers
+    std::vector<buffer> buffers;
+    buffers.push_back(create_buffer(info, buffer_size));
+    buffers.push_back(create_buffer(info, sizeof(fill_kernel_scalar_args)));
 
-    init_compute_pipeline_layout(info, samplers.size(), num_buffers);
+    void* data = NULL;
+
+    // fill scalar args buffer with contents
+    VkResult U_ASSERT_ONLY res = vkMapMemory(info.device, buffers[1].mem, 0, VK_WHOLE_SIZE, 0, &data);
+    assert(res == VK_SUCCESS);
+    memcpy(data, &scalar_args, sizeof(scalar_args));
+    vkUnmapMemory(info.device, buffers[1].mem);
+    data = NULL;
+
+    // clear image buffer
+    res = vkMapMemory(info.device, buffers[0].mem, 0, VK_WHOLE_SIZE, 0, &data);
+    assert(res == VK_SUCCESS);
+    memset(data, 0, buffer_size);
+    vkUnmapMemory(info.device, buffers[0].mem);
+    data = NULL;
+
+    // create the pipeline
+    init_compute_pipeline_layout(info, samplers.size(), buffers.size());
     init_compute_pipeline(info, compute_shader, "FillWithColorKernel");
 
-    // bind memory buffers
+    // bind descriptor sets
     // invoke kernel
-    // examine results
+
+    // examine result buffer contents
 
     //
     // Clean up
@@ -231,6 +333,7 @@ int sample_main(int argc, char *argv[]) {
     std::for_each(info.desc_layout.begin(), info.desc_layout.end(), [&info](VkDescriptorSetLayout l) { vkDestroyDescriptorSetLayout(info.device, l, NULL); });
     vkDestroyPipelineLayout(info.device, info.pipeline_layout, NULL);
 
+    std::for_each(buffers.begin(), buffers.end(), [&info](const buffer& b) { destroy_buffer(info, b); });
     std::for_each(samplers.begin(), samplers.end(), [&info](VkSampler s) { vkDestroySampler(info.device, s, NULL); });
 
     // Cannot use the shader module desctruction built into the sampel framework because it is too
