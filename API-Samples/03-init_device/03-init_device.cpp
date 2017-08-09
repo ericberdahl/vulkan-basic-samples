@@ -105,6 +105,35 @@ void init_compute_queue_family_index(struct sample_info &info) {
     assert(found);
 }
 
+void my_init_descriptor_pool(struct sample_info &info) {
+    VkDescriptorPoolSize type_count[2];
+    type_count[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+    type_count[0].descriptorCount = 4;
+    type_count[1].type = VK_DESCRIPTOR_TYPE_SAMPLER;
+    type_count[0].descriptorCount = 4;
+
+    VkDescriptorPoolCreateInfo createInfo = {};
+    createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    createInfo.maxSets = 2;
+    createInfo.poolSizeCount = 2;
+    createInfo.pPoolSizes = type_count;
+
+    VkResult U_ASSERT_ONLY res = vkCreateDescriptorPool(info.device, &createInfo, NULL, &info.desc_pool);
+    assert(res == VK_SUCCESS);
+}
+
+void my_init_descriptor_set(struct sample_info &info) {
+    VkDescriptorSetAllocateInfo createInfo = {};
+    createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    createInfo.descriptorPool = info.desc_pool;
+    createInfo.descriptorSetCount = info.desc_layout.size();
+    createInfo.pSetLayouts = info.desc_layout.data();
+
+    info.desc_set.resize(createInfo.descriptorSetCount);
+    VkResult U_ASSERT_ONLY res = vkAllocateDescriptorSets(info.device, &createInfo, info.desc_set.data());
+    assert(res == VK_SUCCESS);
+}
+
 VkShaderModule create_shader(struct sample_info &info, const char* spvFileName) {
     std::FILE* spv_file = AndroidFopen(spvFileName, "rb");
 
@@ -191,7 +220,7 @@ buffer create_buffer(struct sample_info &info, VkDeviceSize num_bytes) {
     // Allocate the buffer
     VkBufferCreateInfo buf_info = {};
     buf_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    buf_info.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    buf_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
     buf_info.size = num_bytes;
     buf_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
@@ -284,6 +313,10 @@ int sample_main(int argc, char *argv[]) {
 
     init_debug_report_callback(info, dbgFunc);
 
+    init_command_pool(info);
+    init_command_buffer(info);
+    my_init_descriptor_pool(info);
+
     // We cannot use the shader support built into the sample framework because it is too tightly
     // tied to a graphics pipeline. Instead, track our compute shader externally.
     const VkShaderModule compute_shader = create_shader(info, "fills-opt.spv");
@@ -316,14 +349,26 @@ int sample_main(int argc, char *argv[]) {
     init_compute_pipeline_layout(info, samplers.size(), buffers.size());
     init_compute_pipeline(info, compute_shader, "FillWithColorKernel");
 
-    // bind descriptor sets
-    // invoke kernel
+    my_init_descriptor_set(info);
 
+    execute_begin_command_buffer(info);
+        vkCmdBindPipeline(info.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, info.pipeline);
+
+        // bind descriptor sets
+
+        // NOTE: Current logic is inefficient, 1 work item per work group
+        vkCmdDispatch(info.cmd, buffer_width, buffer_height, 1);
+    execute_end_command_buffer(info);
+
+    // invoke kernel
     // examine result buffer contents
 
     //
     // Clean up
     //
+
+    res = vkFreeDescriptorSets(info.device, info.desc_pool, info.desc_set.size(), info.desc_set.data());
+    assert(res == VK_SUCCESS);
 
     destroy_pipeline(info);
 
@@ -340,6 +385,9 @@ int sample_main(int argc, char *argv[]) {
     // tightly tied to the graphics pipeline (e.g. hard-coding the number and type of shaders).
     vkDestroyShaderModule(info.device, compute_shader, NULL);
 
+    destroy_descriptor_pool(info);
+    destroy_command_buffer(info);
+    destroy_command_pool(info);
     destroy_debug_report_callback(info);
     destroy_device(info);
     destroy_instance(info);
