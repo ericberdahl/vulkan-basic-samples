@@ -24,6 +24,7 @@ create and destroy a Vulkan physical device
 
 /* This is part of the draw cube progression */
 
+#include <algorithm>
 #include <iostream>
 #include <cassert>
 #include <cstdlib>
@@ -154,10 +155,10 @@ VkDescriptorSetLayout create_buffer_descriptor_set(VkDevice device, int numBuffe
     return result;
 }
 
-void init_compute_pipeline_layout(struct sample_info &info) {
+void init_compute_pipeline_layout(struct sample_info &info, int num_samplers, int num_buffers) {
     info.desc_layout.resize(0);
-    info.desc_layout.push_back(create_sampler_descriptor_set(info.device, 4));
-    info.desc_layout.push_back(create_buffer_descriptor_set(info.device, 2));
+    info.desc_layout.push_back(create_sampler_descriptor_set(info.device, num_samplers));
+    info.desc_layout.push_back(create_buffer_descriptor_set(info.device, num_buffers));
 
     VkPipelineLayoutCreateInfo createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -183,6 +184,9 @@ void init_compute_pipeline(struct sample_info &info, VkShaderModule shaderModule
 }
 
 int sample_main(int argc, char *argv[]) {
+    const int num_shaders = 4;
+    const int num_buffers = 2;
+
     struct sample_info info = {};
     init_global_layer_properties(info);
 
@@ -203,8 +207,17 @@ int sample_main(int argc, char *argv[]) {
     // tied to a graphics pipeline. Instead, track our compute shader externally.
     const VkShaderModule compute_shader = create_shader(info, "fills-opt.spv");
 
-    init_compute_pipeline_layout(info);
+    std::vector<VkSampler> samplers(4, VK_NULL_HANDLE);
+    std::for_each(samplers.begin(), samplers.end(), [&info](VkSampler& s) { init_sampler(info, s); });
+
+    // create memory buffers
+
+    init_compute_pipeline_layout(info, samplers.size(), num_buffers);
     init_compute_pipeline(info, compute_shader, "FillWithColorKernel");
+
+    // bind memory buffers
+    // invoke kernel
+    // examine results
 
     //
     // Clean up
@@ -215,8 +228,10 @@ int sample_main(int argc, char *argv[]) {
     // Cannot use the descriptor set and pipeline layout destruction built into the sample framework
     // because it is too tightly tied to the graphics pipeline (e.g. hard-coding the number of
     // descriptor set layouts).
-    for (int i = 0; i < info.desc_layout.size(); i++) vkDestroyDescriptorSetLayout(info.device, info.desc_layout[i], NULL);
+    std::for_each(info.desc_layout.begin(), info.desc_layout.end(), [&info](VkDescriptorSetLayout l) { vkDestroyDescriptorSetLayout(info.device, l, NULL); });
     vkDestroyPipelineLayout(info.device, info.pipeline_layout, NULL);
+
+    std::for_each(samplers.begin(), samplers.end(), [&info](VkSampler s) { vkDestroySampler(info.device, s, NULL); });
 
     // Cannot use the shader module desctruction built into the sampel framework because it is too
     // tightly tied to the graphics pipeline (e.g. hard-coding the number and type of shaders).
@@ -225,6 +240,8 @@ int sample_main(int argc, char *argv[]) {
     destroy_debug_report_callback(info);
     destroy_device(info);
     destroy_instance(info);
+
+    LOGI("Complete!");
 
     return 0;
 }
