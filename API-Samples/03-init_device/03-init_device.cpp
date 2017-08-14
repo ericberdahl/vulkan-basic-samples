@@ -374,7 +374,7 @@ int sample_main(int argc, char *argv[]) {
 
     // We cannot use the shader support built into the sample framework because it is too tightly
     // tied to a graphics pipeline. Instead, track our compute shader externally.
-    const VkShaderModule compute_shader = create_shader(info, "fills-opt.spv");
+    const VkShaderModule compute_shader = create_shader(info, "fills.spv");
 
     std::vector<VkSampler> samplers(4, VK_NULL_HANDLE);
     std::for_each(samplers.begin(), samplers.end(), [&info](VkSampler& s) { init_sampler(info, s); });
