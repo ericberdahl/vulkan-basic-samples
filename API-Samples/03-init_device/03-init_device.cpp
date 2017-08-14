@@ -43,6 +43,14 @@ struct float4 {
     float w;
 };
 
+bool operator==(const float4& l, const float4& r) {
+    return (l.w == r.w && l.x == r.x && l.y == r.y && l.z == r.z);
+}
+
+bool operator!=(const float4& l, const float4& r) {
+    return !(l == r);
+}
+
 struct fill_kernel_scalar_args {
     int     inPitch;        // offset 0
     int     inDeviceFormat; // DevicePixelFormat offset 4
@@ -335,6 +343,67 @@ void init_compute_pipeline(struct sample_info &info, VkShaderModule shaderModule
     assert(res == VK_SUCCESS);
 }
 
+void memset_buffer(VkDevice device, VkDeviceMemory memory, VkDeviceSize offset, VkDeviceSize size, int value) {
+    void* data = NULL;
+    VkResult U_ASSERT_ONLY res = vkMapMemory(device, memory, offset, size, 0, &data);
+    assert(res == VK_SUCCESS);
+    memset(data, 0, size);
+    vkUnmapMemory(device, memory);
+}
+
+void memcpy_buffer(VkDevice device, VkDeviceMemory memory, VkDeviceSize offset, VkDeviceSize size, const void* source) {
+    void* data = NULL;
+    VkResult U_ASSERT_ONLY res = vkMapMemory(device, memory, offset, size, 0, &data);
+    assert(res == VK_SUCCESS);
+    memcpy(data, source, size);
+    vkUnmapMemory(device, memory);
+}
+
+void fill_command_buffer(struct sample_info &info, uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) {
+    execute_begin_command_buffer(info);
+    vkCmdBindPipeline(info.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, info.pipeline);
+
+    vkCmdBindDescriptorSets(info.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            info.pipeline_layout,
+                            0,
+                            info.desc_set.size(), info.desc_set.data(),
+                            0, NULL);
+
+    // NOTE: Current logic is inefficient, 1 work item per work group
+    vkCmdDispatch(info.cmd, groupCountX, groupCountY, groupCountZ);
+    execute_end_command_buffer(info);
+}
+
+void check_results(struct sample_info &info, VkDeviceMemory memory, int width, int height, int pitch, const float4& expected) {
+    void* data = NULL;
+
+    unsigned int num_correct_pixels = 0;
+    unsigned int num_incorrect_pixels = 0;
+    VkResult U_ASSERT_ONLY res = vkMapMemory(info.device, memory, 0, VK_WHOLE_SIZE, 0, &data);
+    assert(res == VK_SUCCESS);
+    {
+        const float4* pixels = static_cast<const float4*>(data);
+
+        const float4* row = pixels;
+        for (int r = 0; r < height; ++r, row += pitch) {
+            const float4* p = row;
+            for (int c = 0; c < width; ++c, ++p) {
+                const bool pixel_is_correct = (*p == expected);
+                if (pixel_is_correct) {
+                    ++num_correct_pixels;
+                }
+                else {
+                    ++num_incorrect_pixels;
+                    LOGE("pixels{row:%d, col%d} = {x=%f, y=%f, z=%f, w=%f}", r, c, p->x, p->y, p->z, p->w);
+                }
+            }
+        }
+    }
+    vkUnmapMemory(info.device, memory);
+
+    LOGE("Correct pixels=%d; Incorrect pixels=%d", num_correct_pixels, num_incorrect_pixels);
+}
+
 int sample_main(int argc, char *argv[]) {
     const int buffer_height = 32;
     const int buffer_width = 32;
@@ -384,70 +453,31 @@ int sample_main(int argc, char *argv[]) {
     buffers.push_back(create_buffer(info, buffer_size));
     buffers.push_back(create_buffer(info, sizeof(fill_kernel_scalar_args)));
 
-    void* data = NULL;
-
     // fill scalar args buffer with contents
-    VkResult U_ASSERT_ONLY res = vkMapMemory(info.device, buffers[1].mem, 0, VK_WHOLE_SIZE, 0, &data);
-    assert(res == VK_SUCCESS);
-    memcpy(data, &scalar_args, sizeof(scalar_args));
-    vkUnmapMemory(info.device, buffers[1].mem);
-    data = NULL;
+    memcpy_buffer(info.device, buffers[1].mem, 0, sizeof(scalar_args), &scalar_args);
 
     // clear image buffer
-    res = vkMapMemory(info.device, buffers[0].mem, 0, VK_WHOLE_SIZE, 0, &data);
-    assert(res == VK_SUCCESS);
-    memset(data, 0, buffer_size);
-    vkUnmapMemory(info.device, buffers[0].mem);
-    data = NULL;
+    memset_buffer(info.device, buffers[0].mem, 0, buffer_size, 0);
 
     // create the pipeline
     init_compute_pipeline_layout(info, samplers.size(), buffers.size());
     init_compute_pipeline(info, compute_shader, "FillWithColorKernel");
 
     my_init_descriptor_set(info);
-
     update_descriptor_sets(info, samplers, buffers);
-
-    execute_begin_command_buffer(info);
-        vkCmdBindPipeline(info.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, info.pipeline);
-
-        vkCmdBindDescriptorSets(info.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                info.pipeline_layout,
-                                0,
-                                info.desc_set.size(), info.desc_set.data(),
-                                0, NULL);
-
-        // NOTE: Current logic is inefficient, 1 work item per work group
-        vkCmdDispatch(info.cmd, buffer_width, buffer_height, 1);
-    execute_end_command_buffer(info);
-
+    fill_command_buffer(info, buffer_width, buffer_height, 1);
     submit_command(info);
+
     vkQueueWaitIdle(info.graphics_queue);
 
     // examine result buffer contents
-    res = vkMapMemory(info.device, buffers[0].mem, 0, VK_WHOLE_SIZE, 0, &data);
-    assert(res == VK_SUCCESS);
-    {
-        const float4* pixels = static_cast<const float4*>(data);
-
-        const float4* row = pixels;
-        for (int r = 0; r < scalar_args.inHeight; ++r, row += scalar_args.inPitch) {
-            const float4* p = row;
-            for (int c = 0; c < scalar_args.inWidth; ++c, ++p) {
-                if (p->x != 1.0f || p->y != 0 || p->z != 0 || p->w != 1.0f) {
-                    LOGE("pixels{row:%d, col%d} = {x=%f, y=%f, z=%f, w=%f}", r, c, p->x, p->y, p->z, p->w);
-                }
-            }
-        }
-    }
-    vkUnmapMemory(info.device, buffers[0].mem);
-    data = NULL;
+    check_results(info, buffers[0].mem, scalar_args.inWidth, scalar_args.inHeight, scalar_args.inPitch, scalar_args.inColor);
 
     //
     // Clean up
     //
 
-    res = vkFreeDescriptorSets(info.device, info.desc_pool, info.desc_set.size(), info.desc_set.data());
+    VkResult U_ASSERT_ONLY res = vkFreeDescriptorSets(info.device, info.desc_pool, info.desc_set.size(), info.desc_set.data());
     assert(res == VK_SUCCESS);
 
     destroy_pipeline(info);
