@@ -415,9 +415,17 @@ int sample_main(int argc, char *argv[]) {
             buffer_width,               // inWidth
             buffer_height,              // inHeight
             {0,0},                      // unused
-            { 1.0f, 0.0f, 0.0f, 1.0f }  // inColor
+            { 0.25f, 0.50f, 0.75f, 1.0f }  // inColor
     };
     const std::size_t buffer_size = scalar_args.inPitch * scalar_args.inHeight * sizeof(float4);
+
+#if 1
+    const char* const spv_module_name = "fills.spv";
+    const char* const spv_entry_point = "FillWithColorKernel";
+#else
+    const char* const spv_module_name = "fills_glsl.spv";
+    const char* const spv_entry_point = "main";
+#endif
 
     struct sample_info info = {};
     init_global_layer_properties(info);
@@ -443,7 +451,7 @@ int sample_main(int argc, char *argv[]) {
 
     // We cannot use the shader support built into the sample framework because it is too tightly
     // tied to a graphics pipeline. Instead, track our compute shader externally.
-    const VkShaderModule compute_shader = create_shader(info, "fills.spv");
+    const VkShaderModule compute_shader = create_shader(info, spv_module_name);
 
     std::vector<VkSampler> samplers(4, VK_NULL_HANDLE);
     std::for_each(samplers.begin(), samplers.end(), [&info](VkSampler& s) { init_sampler(info, s); });
@@ -461,7 +469,7 @@ int sample_main(int argc, char *argv[]) {
 
     // create the pipeline
     init_compute_pipeline_layout(info, samplers.size(), buffers.size());
-    init_compute_pipeline(info, compute_shader, "FillWithColorKernel");
+    init_compute_pipeline(info, compute_shader, spv_entry_point);
 
     my_init_descriptor_set(info);
     update_descriptor_sets(info, samplers, buffers);
