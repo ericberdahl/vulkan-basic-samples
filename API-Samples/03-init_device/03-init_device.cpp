@@ -329,7 +329,27 @@ void submit_command(struct sample_info &info) {
 
 }
 
-void init_compute_pipeline(struct sample_info &info, VkShaderModule shaderModule, const char* entryName) {
+void init_compute_pipeline(struct sample_info &info, VkShaderModule shaderModule, const char* entryName, int workGroupSizeX, int workGroupSizeY) {
+    const unsigned int num_workgroup_sizes = 2;
+    const int32_t workGroupSizes[num_workgroup_sizes] = { workGroupSizeX, workGroupSizeY };
+    VkSpecializationMapEntry specializationEntries[num_workgroup_sizes] = {
+            {
+                    0,                          // specialization constant 0 - workgroup size X
+                    0,                          // offset - start of workGroupSizes array
+                    sizeof(workGroupSizes[0])   // sizeof the first element
+            },
+            {
+                    1,                          // specialiation constant 1 - workgroup size Y
+                    sizeof(int32_t),            // offset - one element into the array
+                    sizeof(workGroupSizes[1])   // sizeof the second element
+            }
+    };
+    VkSpecializationInfo specializationInfo = {};
+    specializationInfo.mapEntryCount = num_workgroup_sizes;
+    specializationInfo.pMapEntries = specializationEntries;
+    specializationInfo.dataSize = sizeof(workGroupSizes);
+    specializationInfo.pData = workGroupSizes;
+
     VkComputePipelineCreateInfo createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
     createInfo.layout = info.pipeline_layout;
@@ -338,6 +358,7 @@ void init_compute_pipeline(struct sample_info &info, VkShaderModule shaderModule
     createInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
     createInfo.stage.module = shaderModule;
     createInfo.stage.pName = entryName;
+    createInfo.stage.pSpecializationInfo = &specializationInfo;
 
     VkResult U_ASSERT_ONLY res = vkCreateComputePipelines(info.device, VK_NULL_HANDLE, 1, &createInfo, NULL, &info.pipeline);
     assert(res == VK_SUCCESS);
@@ -405,8 +426,8 @@ void check_results(struct sample_info &info, VkDeviceMemory memory, int width, i
 }
 
 int sample_main(int argc, char *argv[]) {
-    const int buffer_height = 32;
-    const int buffer_width = 32;
+    const int buffer_height = 64;
+    const int buffer_width = 64;
     const fill_kernel_scalar_args scalar_args = {
             buffer_width,               // inPitch
             1,                          // inDeviceFormat - kDevicePixelFormat_BGRA_4444_32f
@@ -426,6 +447,10 @@ int sample_main(int argc, char *argv[]) {
     const char* const spv_module_name = "fills_glsl.spv";
     const char* const spv_entry_point = "main";
 #endif
+    const int workgroup_size_x = 32;
+    const int workgroup_size_y = 32;
+    const int num_workgroups_x = (buffer_width + workgroup_size_x - 1) / workgroup_size_x;
+    const int num_workgroups_y = (buffer_height + workgroup_size_y - 1) / workgroup_size_y;
 
     struct sample_info info = {};
     init_global_layer_properties(info);
@@ -469,11 +494,11 @@ int sample_main(int argc, char *argv[]) {
 
     // create the pipeline
     init_compute_pipeline_layout(info, samplers.size(), buffers.size());
-    init_compute_pipeline(info, compute_shader, spv_entry_point);
+    init_compute_pipeline(info, compute_shader, module.entry_point, workgroup_size_x, workgroup_size_y);
 
     my_init_descriptor_set(info);
     update_descriptor_sets(info, samplers, buffers);
-    fill_command_buffer(info, buffer_width, buffer_height, 1);
+    fill_command_buffer(info, num_workgroups_x, num_workgroups_y, 1);
     submit_command(info);
 
     vkQueueWaitIdle(info.graphics_queue);
