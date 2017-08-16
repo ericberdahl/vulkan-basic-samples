@@ -29,6 +29,8 @@ create and destroy a Vulkan physical device
 #include <cassert>
 #include <cstdlib>
 #include <fstream>
+#include <iterator>
+#include <string>
 #include <util_init.hpp>
 
 struct buffer {
@@ -41,6 +43,28 @@ struct float4 {
     float y;
     float z;
     float w;
+};
+
+struct spv_map {
+    struct sampler {
+        int opencl_flags;
+        int descriptor_set;
+        int binding;
+    };
+
+    struct kernel_arg {
+        int descriptor_set;
+        int binding;
+        int offset;
+    };
+
+    struct kernel {
+        std::string name;
+        std::vector<kernel_arg> args;
+    };
+
+    std::vector<sampler>    samplers;
+    std::vector<kernel>     kernels;
 };
 
 bool operator==(const float4& l, const float4& r) {
@@ -97,6 +121,110 @@ VKAPI_ATTR VkBool32 VKAPI_CALL dbgFunc(VkDebugReportFlagsEXT msgFlags, VkDebugRe
      * keep that behavior here.
      */
     return false;
+}
+
+std::string read_csv_field(std::istream& in) {
+    std::string result;
+
+    if (in.good()) {
+        const bool is_quoted = (in.peek() == '"');
+
+        if (is_quoted) {
+            in.ignore(std::numeric_limits<std::streamsize>::max(), '"');
+        }
+
+        std::getline(in, result, is_quoted ? '"' : ',');
+
+        if (is_quoted) {
+            in.ignore(std::numeric_limits<std::streamsize>::max(), ',');
+        }
+    }
+
+    return result;
+}
+
+spv_map create_spv_map_from_file(const char* spvmapFilename) {
+    // Read the spvmap file into a string buffer
+    std::FILE* spvmap_file = AndroidFopen(spvmapFilename, "rb");
+    assert(spvmap_file != NULL);
+    std::fseek(spvmap_file, 0, SEEK_END);
+    std::string buffer(std::ftell(spvmap_file), ' ');
+    std::fseek(spvmap_file, 0, SEEK_SET);
+    std::fread(&buffer.front(), 1, buffer.length(), spvmap_file);
+    std::fclose(spvmap_file);
+
+    // parse the spvmap file contents
+    spv_map result;
+    std::istringstream in(buffer);
+    while (!in.eof()) {
+        // read one line
+        std::string line;
+        std::getline(in, line);
+
+        std::istringstream in_line(line);
+        std::string key = read_csv_field(in_line);
+        std::string value = read_csv_field(in_line);
+        if ("sampler" == key) {
+            auto s = result.samplers.insert(result.samplers.end(), spv_map::sampler());
+            assert(s != result.samplers.end());
+
+            s->opencl_flags = std::atoi(value.c_str());
+
+            while (!in_line.eof()) {
+                key = read_csv_field(in_line);
+                value = read_csv_field(in_line);
+
+                if ("descriptorSet" == key) {
+                    s->descriptor_set = std::atoi(value.c_str());
+                }
+                else if ("binding" == key) {
+                    s->binding = std::atoi(value.c_str());
+                }
+            }
+        }
+        else if ("kernel" == key) {
+            auto kernel = std::find_if(result.kernels.begin(), result.kernels.end(), [&value](const spv_map::kernel& iter) { return iter.name == value; });
+            if (kernel == result.kernels.end()) {
+                kernel = result.kernels.insert(kernel, spv_map::kernel());
+                kernel->name = value;
+            }
+            assert(kernel != result.kernels.end());
+
+            auto ka = kernel->args.end();
+
+            while (!in_line.eof()) {
+                key = read_csv_field(in_line);
+                value = read_csv_field(in_line);
+
+                if ("argOrdinal" == key) {
+                    assert(ka == kernel->args.end());
+
+                    const int arg_index = std::atoi(value.c_str());
+
+                    if (kernel->args.size() <= arg_index) {
+                        spv_map::kernel_arg empty_arg = {};
+                        ka = kernel->args.insert(ka, arg_index - kernel->args.size() + 1, empty_arg);
+                    }
+                    else {
+                        ka = std::next(kernel->args.begin(), arg_index);
+                    }
+
+                    assert(ka != kernel->args.end());
+                }
+                else if ("descriptorSet" == key) {
+                    ka->descriptor_set = std::atoi(value.c_str());
+                }
+                else if ("binding" == key) {
+                    ka->binding = std::atoi(value.c_str());
+                }
+                else if ("offset" == key) {
+                    ka->offset = std::atoi(value.c_str());
+                }
+            }
+        }
+    }
+
+    return result;
 }
 
 void init_compute_queue_family_index(struct sample_info &info) {
@@ -186,6 +314,7 @@ void update_descriptor_sets(struct sample_info &info, const std::vector<VkSample
 
 VkShaderModule create_shader(struct sample_info &info, const char* spvFileName) {
     std::FILE* spv_file = AndroidFopen(spvFileName, "rb");
+    assert(spv_file != NULL);
 
     std::fseek(spv_file, 0, SEEK_END);
     // Use vector of uint32_t to ensure alignment is satisfied.
@@ -440,17 +569,14 @@ int sample_main(int argc, char *argv[]) {
     };
     const std::size_t buffer_size = scalar_args.inPitch * scalar_args.inHeight * sizeof(float4);
 
-#if 1
-    const char* const spv_module_name = "fills.spv";
-    const char* const spv_entry_point = "FillWithColorKernel";
-#else
-    const char* const spv_module_name = "fills_glsl.spv";
-    const char* const spv_entry_point = "main";
-#endif
     const int workgroup_size_x = 32;
     const int workgroup_size_y = 32;
     const int num_workgroups_x = (buffer_width + workgroup_size_x - 1) / workgroup_size_x;
     const int num_workgroups_y = (buffer_height + workgroup_size_y - 1) / workgroup_size_y;
+
+    const char* const spv_module_name = "fills.spv";
+    const char* const spv_module_mapname = "fills.spvmap";
+    const char* const spv_module_entry_point = "FillWithColorKernel";
 
     struct sample_info info = {};
     init_global_layer_properties(info);
@@ -477,6 +603,7 @@ int sample_main(int argc, char *argv[]) {
     // We cannot use the shader support built into the sample framework because it is too tightly
     // tied to a graphics pipeline. Instead, track our compute shader externally.
     const VkShaderModule compute_shader = create_shader(info, spv_module_name);
+    const spv_map shader_arg_map = create_spv_map_from_file(spv_module_mapname);
 
     std::vector<VkSampler> samplers(4, VK_NULL_HANDLE);
     std::for_each(samplers.begin(), samplers.end(), [&info](VkSampler& s) { init_sampler(info, s); });
@@ -494,7 +621,7 @@ int sample_main(int argc, char *argv[]) {
 
     // create the pipeline
     init_compute_pipeline_layout(info, samplers.size(), buffers.size());
-    init_compute_pipeline(info, compute_shader, module.entry_point, workgroup_size_x, workgroup_size_y);
+    init_compute_pipeline(info, compute_shader, spv_module_entry_point, workgroup_size_x, workgroup_size_y);
 
     my_init_descriptor_set(info);
     update_descriptor_sets(info, samplers, buffers);
