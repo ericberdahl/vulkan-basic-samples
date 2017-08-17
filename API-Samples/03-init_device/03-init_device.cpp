@@ -473,7 +473,7 @@ void buffer::reset() {
     device = VK_NULL_HANDLE;
 }
 
-void init_compute_pipeline_layout(struct sample_info &info, int num_buffers, const spv_map& spvMap) {
+void init_compute_pipeline_layout(struct sample_info &info, const spv_map& spvMap) {
     const int num_samplers = spvMap.samplers.size();
     const std::vector<int> num_bindings = count_kernel_bindings(spvMap);
 
@@ -644,7 +644,6 @@ int sample_main(int argc, char *argv[]) {
     init_device_queue(info);
 
     init_debug_report_callback(info, dbgFunc);
-
 
     init_command_pool(info);
     init_command_buffer(info);
