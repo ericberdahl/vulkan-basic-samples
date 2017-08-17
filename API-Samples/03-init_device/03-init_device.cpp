@@ -443,12 +443,16 @@ void buffer::allocate(sample_info &info, VkDeviceSize inNumBytes) {
 }
 
 void buffer::reset() {
-    vkDestroyBuffer(device, buf, NULL);
-    vkFreeMemory(device, mem, NULL);
+    if (buf != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device, buf, NULL);
+        buf = VK_NULL_HANDLE;
+    }
+    if (mem != VK_NULL_HANDLE) {
+        vkFreeMemory(device, mem, NULL);
+        mem = VK_NULL_HANDLE;
+    }
 
     device = VK_NULL_HANDLE;
-    buf = VK_NULL_HANDLE;
-    mem = VK_NULL_HANDLE;
 }
 
 void init_compute_pipeline_layout(struct sample_info &info, int num_samplers, int num_buffers) {
