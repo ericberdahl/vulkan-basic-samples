@@ -474,16 +474,15 @@ void buffer::reset() {
 }
 
 void init_compute_pipeline_layout(struct sample_info &info, const spv_map& spvMap) {
+    info.desc_layout.clear();
+
     const int num_samplers = spvMap.samplers.size();
-    const std::vector<int> num_bindings = count_kernel_bindings(spvMap);
-
-    info.desc_layout.resize(0);
     if (0 < num_samplers) {
-
-        info.desc_layout.push_back(create_descriptor_set_layout(info.device, spvMap.samplers.size(),
+        info.desc_layout.push_back(create_descriptor_set_layout(info.device, num_samplers,
                                                                 VK_DESCRIPTOR_TYPE_SAMPLER));
     }
-    for (auto &nb : num_bindings) {
+
+    for (auto &nb : count_kernel_bindings(spvMap)) {
         info.desc_layout.push_back(create_descriptor_set_layout(info.device, nb,
                                                                 VK_DESCRIPTOR_TYPE_STORAGE_BUFFER));
     };
