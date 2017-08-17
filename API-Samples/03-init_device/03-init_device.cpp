@@ -57,25 +57,28 @@ struct float4 {
 
 struct spv_map {
     struct sampler {
-        sampler() : opencl_flags(0), descriptor_set(-1), binding(-1) {};
+        sampler() : opencl_flags(0), binding(-1) {};
 
         int opencl_flags;
-        int descriptor_set;
         int binding;
     };
 
     struct kernel_arg {
-        kernel_arg() : descriptor_set(-1), binding(-1), offset(0) {};
+        kernel_arg() : binding(-1), offset(0) {};
 
-        int descriptor_set;
         int binding;
         int offset;
     };
 
     struct kernel {
-        std::string name;
+        kernel() : name(), descriptor_set(-1), args() {};
+
+        std::string             name;
+        int                     descriptor_set;
         std::vector<kernel_arg> args;
     };
+
+    spv_map() : samplers(), kernels() {};
 
     std::vector<sampler>    samplers;
     std::vector<kernel>     kernels;
@@ -179,7 +182,9 @@ spv_map create_spv_map(std::istream& in) {
                 value = read_csv_field(in_line);
 
                 if ("descriptorSet" == key) {
-                    s->descriptor_set = std::atoi(value.c_str());
+                    // all samplers, if any, are documented to share descriptor set 0
+                    const int ds = std::atoi(value.c_str());
+                    assert(ds == 0);
                 }
                 else if ("binding" == key) {
                     s->binding = std::atoi(value.c_str());
@@ -215,7 +220,13 @@ spv_map create_spv_map(std::istream& in) {
                     assert(ka != kernel->args.end());
                 }
                 else if ("descriptorSet" == key) {
-                    ka->descriptor_set = std::atoi(value.c_str());
+                    const int ds = std::atoi(value.c_str());
+                    if (-1 == kernel->descriptor_set) {
+                        kernel->descriptor_set = ds;
+                    }
+
+                    // all args for a kernel are documented to share the same descriptor set
+                    assert(ds == kernel->descriptor_set);
                 }
                 else if ("binding" == key) {
                     ka->binding = std::atoi(value.c_str());
@@ -243,6 +254,34 @@ spv_map create_spv_map(const char* spvmapFilename) {
     // parse the spvmap file contents
     std::istringstream in(buffer);
     return create_spv_map(in);
+}
+
+std::vector<int> count_kernel_bindings(const spv_map& spvMap) {
+    std::vector<int> result;
+
+    for (auto &k : spvMap.kernels) {
+        auto max_arg = std::max_element(k.args.begin(), k.args.end(), [](const spv_map::kernel_arg& a, const spv_map::kernel_arg& b) {
+            return a.binding < b.binding;
+        });
+
+        if (result.size() <= k.descriptor_set) {
+            result.insert(result.end(), k.descriptor_set - result.size() + 1, 0);
+        }
+
+        result[k.descriptor_set] = max_arg->binding + 1;
+    }
+
+    if (0 < spvMap.samplers.size()) {
+        // There should be no kernel bindings for descriptor set 0 if there are samplers in the
+        // SPIR-V module.
+        assert(result[0] == 0);
+
+        // Remove the first element of the result (because it's a misnomer to say there are 0 kernel
+        // bindings for the first set
+        result.erase(result.begin());
+    }
+
+    return result;
 }
 
 void init_compute_queue_family_index(struct sample_info &info) {
@@ -434,10 +473,20 @@ void buffer::reset() {
     device = VK_NULL_HANDLE;
 }
 
-void init_compute_pipeline_layout(struct sample_info &info, int num_samplers, int num_buffers) {
+void init_compute_pipeline_layout(struct sample_info &info, int num_buffers, const spv_map& spvMap) {
+    const int num_samplers = spvMap.samplers.size();
+    const std::vector<int> num_bindings = count_kernel_bindings(spvMap);
+
     info.desc_layout.resize(0);
-    info.desc_layout.push_back(create_descriptor_set_layout(info.device, num_samplers, VK_DESCRIPTOR_TYPE_SAMPLER));
-    info.desc_layout.push_back(create_descriptor_set_layout(info.device, num_buffers, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER));
+    if (0 < num_samplers) {
+
+        info.desc_layout.push_back(create_descriptor_set_layout(info.device, spvMap.samplers.size(),
+                                                                VK_DESCRIPTOR_TYPE_SAMPLER));
+    }
+    for (auto &nb : num_bindings) {
+        info.desc_layout.push_back(create_descriptor_set_layout(info.device, nb,
+                                                                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER));
+    };
 
     VkPipelineLayoutCreateInfo createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -606,7 +655,7 @@ int sample_main(int argc, char *argv[]) {
     const VkShaderModule compute_shader = create_shader(info, spv_module_name);
     const spv_map shader_arg_map = create_spv_map(spv_module_mapname);
 
-    std::vector<VkSampler> samplers(4, VK_NULL_HANDLE);
+    std::vector<VkSampler> samplers(shader_arg_map.samplers.size(), VK_NULL_HANDLE);
     std::for_each(samplers.begin(), samplers.end(), std::bind(&init_sampler, std::ref(info), std::placeholders::_1));
 
     // create memory buffers
@@ -621,7 +670,7 @@ int sample_main(int argc, char *argv[]) {
     memset_buffer(info.device, buffers[0].mem, 0, buffer_size, 0);
 
     // create the pipeline
-    init_compute_pipeline_layout(info, samplers.size(), buffers.size());
+    init_compute_pipeline_layout(info, buffers.size(), shader_arg_map);
     init_compute_pipeline(info, compute_shader, spv_module_entry_point, workgroup_size_x, workgroup_size_y);
 
     my_init_descriptor_set(info);
