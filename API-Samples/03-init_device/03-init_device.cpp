@@ -669,7 +669,7 @@ int sample_main(int argc, char *argv[]) {
     memset_buffer(info.device, buffers[0].mem, 0, buffer_size, 0);
 
     // create the pipeline
-    init_compute_pipeline_layout(info, buffers.size(), shader_arg_map);
+    init_compute_pipeline_layout(info, shader_arg_map);
     init_compute_pipeline(info, compute_shader, spv_module_entry_point, workgroup_size_x, workgroup_size_y);
 
     my_init_descriptor_set(info);
