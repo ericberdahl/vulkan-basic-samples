@@ -25,6 +25,7 @@ create and destroy a Vulkan physical device
 /* This is part of the draw cube progression */
 
 #include <algorithm>
+#include <functional>
 #include <iostream>
 #include <cassert>
 #include <cstdlib>
@@ -56,12 +57,16 @@ struct float4 {
 
 struct spv_map {
     struct sampler {
+        sampler() : opencl_flags(0), descriptor_set(-1), binding(-1) {};
+
         int opencl_flags;
         int descriptor_set;
         int binding;
     };
 
     struct kernel_arg {
+        kernel_arg() : descriptor_set(-1), binding(-1), offset(0) {};
+
         int descriptor_set;
         int binding;
         int offset;
@@ -152,7 +157,7 @@ std::string read_csv_field(std::istream& in) {
     return result;
 }
 
-spv_map create_spv_map_from_stream(std::istream& in) {
+spv_map create_spv_map(std::istream& in) {
     spv_map result;
 
     while (!in.eof()) {
@@ -201,8 +206,7 @@ spv_map create_spv_map_from_stream(std::istream& in) {
                     const int arg_index = std::atoi(value.c_str());
 
                     if (kernel->args.size() <= arg_index) {
-                        spv_map::kernel_arg empty_arg = {};
-                        ka = kernel->args.insert(ka, arg_index - kernel->args.size() + 1, empty_arg);
+                        ka = kernel->args.insert(ka, arg_index - kernel->args.size() + 1, spv_map::kernel_arg());
                     }
                     else {
                         ka = std::next(kernel->args.begin(), arg_index);
@@ -226,7 +230,7 @@ spv_map create_spv_map_from_stream(std::istream& in) {
     return result;
 }
 
-spv_map create_spv_map_from_file(const char* spvmapFilename) {
+spv_map create_spv_map(const char* spvmapFilename) {
     // Read the spvmap file into a string buffer
     std::FILE *spvmap_file = AndroidFopen(spvmapFilename, "rb");
     assert(spvmap_file != NULL);
@@ -238,7 +242,7 @@ spv_map create_spv_map_from_file(const char* spvmapFilename) {
 
     // parse the spvmap file contents
     std::istringstream in(buffer);
-    return create_spv_map_from_stream(in);
+    return create_spv_map(in);
 }
 
 void init_compute_queue_family_index(struct sample_info &info) {
@@ -357,40 +361,15 @@ VkShaderModule create_shader(struct sample_info &info, const char* spvFileName) 
     return shaderModule;
 }
 
-VkDescriptorSetLayout create_sampler_descriptor_set(VkDevice device, int numSamplers) {
+VkDescriptorSetLayout create_descriptor_set_layout(VkDevice device, int numBindings, VkDescriptorType descriptorType) {
     std::vector<VkDescriptorSetLayoutBinding> bindingSet;
 
     VkDescriptorSetLayoutBinding binding = {};
     binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+    binding.descriptorType = descriptorType;
     binding.descriptorCount = 1;
 
-    for (int i = 0; i < numSamplers; ++i) {
-        binding.binding = i;
-        bindingSet.push_back(binding);
-    }
-
-    VkDescriptorSetLayoutCreateInfo createInfo = {};
-    createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    createInfo.bindingCount = bindingSet.size();
-    createInfo.pBindings = createInfo.bindingCount ? bindingSet.data() : NULL;
-
-    VkDescriptorSetLayout result = VK_NULL_HANDLE;
-    VkResult U_ASSERT_ONLY res = vkCreateDescriptorSetLayout(device, &createInfo, NULL, &result);
-    assert(res == VK_SUCCESS);
-
-    return result;
-}
-
-VkDescriptorSetLayout create_buffer_descriptor_set(VkDevice device, int numBuffers) {
-    std::vector<VkDescriptorSetLayoutBinding> bindingSet;
-
-    VkDescriptorSetLayoutBinding binding = {};
-    binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    binding.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    binding.descriptorCount = 1;
-
-    for (int i = 0; i < numBuffers; ++i) {
+    for (int i = 0; i < numBindings; ++i) {
         binding.binding = i;
         bindingSet.push_back(binding);
     }
@@ -457,8 +436,8 @@ void buffer::reset() {
 
 void init_compute_pipeline_layout(struct sample_info &info, int num_samplers, int num_buffers) {
     info.desc_layout.resize(0);
-    info.desc_layout.push_back(create_sampler_descriptor_set(info.device, num_samplers));
-    info.desc_layout.push_back(create_buffer_descriptor_set(info.device, num_buffers));
+    info.desc_layout.push_back(create_descriptor_set_layout(info.device, num_samplers, VK_DESCRIPTOR_TYPE_SAMPLER));
+    info.desc_layout.push_back(create_descriptor_set_layout(info.device, num_buffers, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER));
 
     VkPipelineLayoutCreateInfo createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
@@ -625,10 +604,10 @@ int sample_main(int argc, char *argv[]) {
     // We cannot use the shader support built into the sample framework because it is too tightly
     // tied to a graphics pipeline. Instead, track our compute shader externally.
     const VkShaderModule compute_shader = create_shader(info, spv_module_name);
-    const spv_map shader_arg_map = create_spv_map_from_file(spv_module_mapname);
+    const spv_map shader_arg_map = create_spv_map(spv_module_mapname);
 
     std::vector<VkSampler> samplers(4, VK_NULL_HANDLE);
-    std::for_each(samplers.begin(), samplers.end(), [&info](VkSampler& s) { init_sampler(info, s); });
+    std::for_each(samplers.begin(), samplers.end(), std::bind(&init_sampler, std::ref(info), std::placeholders::_1));
 
     // create memory buffers
     std::vector<buffer> buffers;
@@ -667,11 +646,11 @@ int sample_main(int argc, char *argv[]) {
     // Cannot use the descriptor set and pipeline layout destruction built into the sample framework
     // because it is too tightly tied to the graphics pipeline (e.g. hard-coding the number of
     // descriptor set layouts).
-    std::for_each(info.desc_layout.begin(), info.desc_layout.end(), [&info](VkDescriptorSetLayout l) { vkDestroyDescriptorSetLayout(info.device, l, NULL); });
+    std::for_each(info.desc_layout.begin(), info.desc_layout.end(), std::bind(vkDestroyDescriptorSetLayout, info.device, std::placeholders::_1, nullptr));
     vkDestroyPipelineLayout(info.device, info.pipeline_layout, NULL);
 
     std::for_each(buffers.begin(), buffers.end(), std::mem_fun_ref(&buffer::reset));
-    std::for_each(samplers.begin(), samplers.end(), [&info](VkSampler s) { vkDestroySampler(info.device, s, NULL); });
+    std::for_each(samplers.begin(), samplers.end(), std::bind(vkDestroySampler, info.device, std::placeholders::_1, nullptr));
 
     // Cannot use the shader module desctruction built into the sampel framework because it is too
     // tightly tied to the graphics pipeline (e.g. hard-coding the number and type of shaders).
