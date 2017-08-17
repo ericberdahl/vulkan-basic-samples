@@ -34,6 +34,15 @@ create and destroy a Vulkan physical device
 #include <util_init.hpp>
 
 struct buffer {
+    buffer() : device(VK_NULL_HANDLE), buf(VK_NULL_HANDLE), mem(VK_NULL_HANDLE) {};
+    buffer(sample_info &info, VkDeviceSize num_bytes) : device(VK_NULL_HANDLE), buf(VK_NULL_HANDLE), mem(VK_NULL_HANDLE) {
+        allocate(info, num_bytes);
+    };
+
+    void allocate(sample_info &info, VkDeviceSize num_bytes);
+    void reset();
+
+    VkDevice        device;
     VkBuffer        buf;
     VkDeviceMemory  mem;
 };
@@ -143,19 +152,9 @@ std::string read_csv_field(std::istream& in) {
     return result;
 }
 
-spv_map create_spv_map_from_file(const char* spvmapFilename) {
-    // Read the spvmap file into a string buffer
-    std::FILE* spvmap_file = AndroidFopen(spvmapFilename, "rb");
-    assert(spvmap_file != NULL);
-    std::fseek(spvmap_file, 0, SEEK_END);
-    std::string buffer(std::ftell(spvmap_file), ' ');
-    std::fseek(spvmap_file, 0, SEEK_SET);
-    std::fread(&buffer.front(), 1, buffer.length(), spvmap_file);
-    std::fclose(spvmap_file);
-
-    // parse the spvmap file contents
+spv_map create_spv_map_from_stream(std::istream& in) {
     spv_map result;
-    std::istringstream in(buffer);
+
     while (!in.eof()) {
         // read one line
         std::string line;
@@ -225,6 +224,21 @@ spv_map create_spv_map_from_file(const char* spvmapFilename) {
     }
 
     return result;
+}
+
+spv_map create_spv_map_from_file(const char* spvmapFilename) {
+    // Read the spvmap file into a string buffer
+    std::FILE *spvmap_file = AndroidFopen(spvmapFilename, "rb");
+    assert(spvmap_file != NULL);
+    std::fseek(spvmap_file, 0, SEEK_END);
+    std::string buffer(std::ftell(spvmap_file), ' ');
+    std::fseek(spvmap_file, 0, SEEK_SET);
+    std::fread(&buffer.front(), 1, buffer.length(), spvmap_file);
+    std::fclose(spvmap_file);
+
+    // parse the spvmap file contents
+    std::istringstream in(buffer);
+    return create_spv_map_from_stream(in);
 }
 
 void init_compute_queue_family_index(struct sample_info &info) {
@@ -393,22 +407,24 @@ VkDescriptorSetLayout create_buffer_descriptor_set(VkDevice device, int numBuffe
     return result;
 }
 
-buffer create_buffer(struct sample_info &info, VkDeviceSize num_bytes) {
-    buffer result = {};
+void buffer::allocate(sample_info &info, VkDeviceSize inNumBytes) {
+    reset();
+
+    device = info.device;
 
     // Allocate the buffer
     VkBufferCreateInfo buf_info = {};
     buf_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
     buf_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-    buf_info.size = num_bytes;
+    buf_info.size = inNumBytes;
     buf_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-    VkResult U_ASSERT_ONLY res = vkCreateBuffer(info.device, &buf_info, NULL, &result.buf);
+    VkResult U_ASSERT_ONLY res = vkCreateBuffer(device, &buf_info, NULL, &buf);
     assert(res == VK_SUCCESS);
 
     // Find out what we need in order to allocate memory for the buffer
     VkMemoryRequirements mem_reqs = {};
-    vkGetBufferMemoryRequirements(info.device, result.buf, &mem_reqs);
+    vkGetBufferMemoryRequirements(device, buf, &mem_reqs);
 
     // Allocate memory for the buffer
     VkMemoryAllocateInfo alloc_info = {};
@@ -418,19 +434,21 @@ buffer create_buffer(struct sample_info &info, VkDeviceSize num_bytes) {
                                        VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
                                        &alloc_info.memoryTypeIndex);
     assert(pass && "No mappable, coherent memory");
-    res = vkAllocateMemory(info.device, &alloc_info, NULL, &result.mem);
+    res = vkAllocateMemory(device, &alloc_info, NULL, &mem);
     assert(res == VK_SUCCESS);
 
     // Bind the memory to the buffer object
-    res = vkBindBufferMemory(info.device, result.buf, result.mem, 0);
+    res = vkBindBufferMemory(device, buf, mem, 0);
     assert(res == VK_SUCCESS);
-
-    return result;
 }
 
-void destroy_buffer(struct sample_info &info, const buffer& buf) {
-    vkDestroyBuffer(info.device, buf.buf, NULL);
-    vkFreeMemory(info.device, buf.mem, NULL);
+void buffer::reset() {
+    vkDestroyBuffer(device, buf, NULL);
+    vkFreeMemory(device, mem, NULL);
+
+    device = VK_NULL_HANDLE;
+    buf = VK_NULL_HANDLE;
+    mem = VK_NULL_HANDLE;
 }
 
 void init_compute_pipeline_layout(struct sample_info &info, int num_samplers, int num_buffers) {
@@ -610,8 +628,8 @@ int sample_main(int argc, char *argv[]) {
 
     // create memory buffers
     std::vector<buffer> buffers;
-    buffers.push_back(create_buffer(info, buffer_size));
-    buffers.push_back(create_buffer(info, sizeof(fill_kernel_scalar_args)));
+    buffers.push_back(buffer(info, buffer_size));
+    buffers.push_back(buffer(info, sizeof(fill_kernel_scalar_args)));
 
     // fill scalar args buffer with contents
     memcpy_buffer(info.device, buffers[1].mem, 0, sizeof(scalar_args), &scalar_args);
@@ -648,7 +666,7 @@ int sample_main(int argc, char *argv[]) {
     std::for_each(info.desc_layout.begin(), info.desc_layout.end(), [&info](VkDescriptorSetLayout l) { vkDestroyDescriptorSetLayout(info.device, l, NULL); });
     vkDestroyPipelineLayout(info.device, info.pipeline_layout, NULL);
 
-    std::for_each(buffers.begin(), buffers.end(), [&info](const buffer& b) { destroy_buffer(info, b); });
+    std::for_each(buffers.begin(), buffers.end(), std::mem_fun_ref(&buffer::reset));
     std::for_each(samplers.begin(), samplers.end(), [&info](VkSampler s) { vkDestroySampler(info.device, s, NULL); });
 
     // Cannot use the shader module desctruction built into the sampel framework because it is too
