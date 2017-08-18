@@ -63,25 +63,60 @@ struct spv_map {
         int binding;
     };
 
-    struct kernel_arg {
-        kernel_arg() : binding(-1), offset(0) {};
-
-        int binding;
-        int offset;
-    };
-
     struct kernel {
+        struct arg {
+            arg() : binding(-1), offset(0) {};
+
+            int binding;
+            int offset;
+        };
+
         kernel() : name(), descriptor_set(-1), args() {};
 
         std::string             name;
         int                     descriptor_set;
-        std::vector<kernel_arg> args;
+        std::vector<arg> args;
     };
 
     spv_map() : samplers(), kernels() {};
 
     std::vector<sampler>    samplers;
     std::vector<kernel>     kernels;
+};
+
+struct invocation_arguments {
+    struct scalar {
+        template<typename T>
+        scalar(const T* baseAddr) : data(baseAddr), size(sizeof(T)) {};
+
+        scalar(const void* baseAddr, std::size_t length) : data(baseAddr), size(length) {};
+
+        scalar() : data(NULL), size(0) {};
+
+        const void* data;
+        std::size_t size;
+    };
+
+    std::vector<VkBuffer>   buffers;
+    std::vector<scalar>     scalars;
+};
+
+
+enum {
+    CLK_ADDRESS_NONE = 0x0000,
+    CLK_ADDRESS_CLAMP_TO_EDGE = 0x0002,
+    CLK_ADDRESS_CLAMP = 0x0004,
+    CLK_ADDRESS_REPEAT = 0x0006,
+    CLK_ADDRESS_MIRRORED_REPEAT = 0x0008,
+    CLK_ADDRESS_MASK = 0x000E,
+
+    CLK_NORMALIZED_COORDS_FALSE = 0x0000,
+    CLK_NORMALIZED_COORDS_TRUE = 0x0001,
+    CLK_NORMALIZED_COORDS_MASK = 0x0001,
+
+    CLK_FILTER_NEAREST = 0x0010,
+    CLK_FILTER_LINEAR = 0x0020,
+    CLK_FILTER_MASK = 0x0030
 };
 
 bool operator==(const float4& l, const float4& r) {
@@ -211,7 +246,7 @@ spv_map create_spv_map(std::istream& in) {
                     const int arg_index = std::atoi(value.c_str());
 
                     if (kernel->args.size() <= arg_index) {
-                        ka = kernel->args.insert(ka, arg_index - kernel->args.size() + 1, spv_map::kernel_arg());
+                        ka = kernel->args.insert(ka, arg_index - kernel->args.size() + 1, spv_map::kernel::arg());
                     }
                     else {
                         ka = std::next(kernel->args.begin(), arg_index);
@@ -260,7 +295,7 @@ std::vector<int> count_kernel_bindings(const spv_map& spvMap) {
     std::vector<int> result;
 
     for (auto &k : spvMap.kernels) {
-        auto max_arg = std::max_element(k.args.begin(), k.args.end(), [](const spv_map::kernel_arg& a, const spv_map::kernel_arg& b) {
+        auto max_arg = std::max_element(k.args.begin(), k.args.end(), [](const spv_map::kernel::arg& a, const spv_map::kernel::arg& b) {
             return a.binding < b.binding;
         });
 
@@ -542,6 +577,45 @@ void init_compute_pipeline(struct sample_info &info, VkShaderModule shaderModule
     assert(res == VK_SUCCESS);
 }
 
+VkSampler create_compatible_sampler(VkDevice device, int opencl_flags) {
+    typedef std::pair<int,VkSamplerAddressMode> address_mode_map;
+    const address_mode_map address_mode_translator[] = {
+            { CLK_ADDRESS_NONE, VK_SAMPLER_ADDRESS_MODE_REPEAT },
+            { CLK_ADDRESS_CLAMP_TO_EDGE, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE},
+            { CLK_ADDRESS_CLAMP, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER },
+            { CLK_ADDRESS_REPEAT, VK_SAMPLER_ADDRESS_MODE_REPEAT },
+            { CLK_ADDRESS_MIRRORED_REPEAT, VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT }
+    };
+
+    const VkFilter filter = ((opencl_flags & CLK_FILTER_MASK) == CLK_FILTER_LINEAR ?
+                             VK_FILTER_LINEAR :
+                             VK_FILTER_NEAREST);
+    const VkBool32 unnormalizedCoordinates = ((opencl_flags & CLK_NORMALIZED_COORDS_MASK) == CLK_NORMALIZED_COORDS_FALSE ? VK_FALSE : VK_TRUE);
+
+    const auto found_map = std::find_if(std::begin(address_mode_translator), std::end(address_mode_translator), [&opencl_flags](const address_mode_map& am) {
+        return (am.first == (opencl_flags & CLK_ADDRESS_MASK));
+    });
+    const VkSamplerAddressMode addressMode = (found_map == std::end(address_mode_translator) ? VK_SAMPLER_ADDRESS_MODE_REPEAT : found_map->second);
+
+    VkSamplerCreateInfo samplerCreateInfo = {};
+    samplerCreateInfo.sType = VK_STRUCTURE_TYPE_SAMPLER_CREATE_INFO;
+    samplerCreateInfo.magFilter = filter;
+    samplerCreateInfo.minFilter = filter ;
+    samplerCreateInfo.mipmapMode = VK_SAMPLER_MIPMAP_MODE_NEAREST;
+    samplerCreateInfo.addressModeU = addressMode;
+    samplerCreateInfo.addressModeV = samplerCreateInfo.addressModeU;
+    samplerCreateInfo.addressModeW = samplerCreateInfo.addressModeU;
+    samplerCreateInfo.anisotropyEnable = VK_FALSE;
+    samplerCreateInfo.compareEnable = VK_FALSE;
+    samplerCreateInfo.unnormalizedCoordinates = unnormalizedCoordinates;
+
+    VkSampler result = VK_NULL_HANDLE;
+    VkResult U_ASSERT_ONLY res = vkCreateSampler(device, &samplerCreateInfo, NULL, &result);
+    assert(res == VK_SUCCESS);
+
+    return result;
+}
+
 void memset_buffer(VkDevice device, VkDeviceMemory memory, VkDeviceSize offset, VkDeviceSize size, int value) {
     void* data = NULL;
     VkResult U_ASSERT_ONLY res = vkMapMemory(device, memory, offset, size, 0, &data);
@@ -653,13 +727,25 @@ int sample_main(int argc, char *argv[]) {
     const VkShaderModule compute_shader = create_shader(info, spv_module_name);
     const spv_map shader_arg_map = create_spv_map(spv_module_mapname);
 
-    std::vector<VkSampler> samplers(shader_arg_map.samplers.size(), VK_NULL_HANDLE);
-    std::for_each(samplers.begin(), samplers.end(), std::bind(&init_sampler, std::ref(info), std::placeholders::_1));
+    std::vector<VkSampler> samplers;
+    std::transform(shader_arg_map.samplers.begin(), shader_arg_map.samplers.end(), std::back_inserter(samplers), [&info](const spv_map::sampler& s) {
+        return create_compatible_sampler(info.device, s.opencl_flags);
+    });
 
     // create memory buffers
     std::vector<buffer> buffers;
     buffers.push_back(buffer(info, buffer_size));
     buffers.push_back(buffer(info, sizeof(fill_kernel_scalar_args)));
+
+    invocation_arguments arguments;
+    arguments.buffers.push_back(buffers[0].buf);
+    arguments.scalars.push_back(invocation_arguments::scalar(&scalar_args.inPitch));
+    arguments.scalars.push_back(invocation_arguments::scalar(&scalar_args.inDeviceFormat));
+    arguments.scalars.push_back(invocation_arguments::scalar(&scalar_args.inOffsetX));
+    arguments.scalars.push_back(invocation_arguments::scalar(&scalar_args.inOffsetY));
+    arguments.scalars.push_back(invocation_arguments::scalar(&scalar_args.inWidth));
+    arguments.scalars.push_back(invocation_arguments::scalar(&scalar_args.inHeight));
+    arguments.scalars.push_back(invocation_arguments::scalar(&scalar_args.inColor));
 
     // fill scalar args buffer with contents
     memcpy_buffer(info.device, buffers[1].mem, 0, sizeof(scalar_args), &scalar_args);
