@@ -524,18 +524,23 @@ void submit_command(struct sample_info &info) {
 }
 
 void init_compute_pipeline(struct sample_info &info, VkShaderModule shaderModule, const char* entryName, int workGroupSizeX, int workGroupSizeY) {
-    const unsigned int num_workgroup_sizes = 2;
-    const int32_t workGroupSizes[num_workgroup_sizes] = { workGroupSizeX, workGroupSizeY };
+    const unsigned int num_workgroup_sizes = 3;
+    const int32_t workGroupSizes[num_workgroup_sizes] = { workGroupSizeX, workGroupSizeY, 1 };
     VkSpecializationMapEntry specializationEntries[num_workgroup_sizes] = {
             {
                     0,                          // specialization constant 0 - workgroup size X
-                    0,                          // offset - start of workGroupSizes array
+                    0*sizeof(int32_t),          // offset - start of workGroupSizes array
                     sizeof(workGroupSizes[0])   // sizeof the first element
             },
             {
                     1,                          // specialiation constant 1 - workgroup size Y
-                    sizeof(int32_t),            // offset - one element into the array
+                    1*sizeof(int32_t),            // offset - one element into the array
                     sizeof(workGroupSizes[1])   // sizeof the second element
+            },
+            {
+                    2,                          // specialiation constant 2 - workgroup size Z
+                    2*sizeof(int32_t),          // offset - two elements into the array
+                    sizeof(workGroupSizes[2])   // sizeof the second element
             }
     };
     VkSpecializationInfo specializationInfo = {};
@@ -677,9 +682,14 @@ int sample_main(int argc, char *argv[]) {
     const int num_workgroups_x = (buffer_width + workgroup_size_x - 1) / workgroup_size_x;
     const int num_workgroups_y = (buffer_height + workgroup_size_y - 1) / workgroup_size_y;
 
-    const char* const spv_module_name = "fills.spv";
     const char* const spv_module_mapname = "fills.spvmap";
+#if 0
+    const char* const spv_module_name = "fills.spv";
     const char* const spv_module_entry_point = "FillWithColorKernel";
+#else
+    const char* const spv_module_name = "fills_glsl.spv";
+    const char* const spv_module_entry_point = "main";
+#endif
 
     struct sample_info info = {};
     init_global_layer_properties(info);
@@ -734,6 +744,13 @@ int sample_main(int argc, char *argv[]) {
 
     vkQueueWaitIdle(info.graphics_queue);
 
+    {
+        fill_kernel_scalar_args* data = NULL;
+        vkMapMemory(info.device, buffers[1].mem, 0, VK_WHOLE_SIZE, 0, reinterpret_cast<void**>(&data));
+        data->inColor.w = 0.0f;
+        vkUnmapMemory(info.device, buffers[1].mem);
+
+    }
     // examine result buffer contents
     check_results(info, buffers[0].mem, scalar_args.inWidth, scalar_args.inHeight, scalar_args.inPitch, scalar_args.inColor);
 
