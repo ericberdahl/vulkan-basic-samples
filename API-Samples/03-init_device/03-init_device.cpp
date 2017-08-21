@@ -84,24 +84,6 @@ struct spv_map {
     std::vector<kernel>     kernels;
 };
 
-struct invocation_arguments {
-    struct scalar {
-        template<typename T>
-        scalar(const T* baseAddr) : data(baseAddr), size(sizeof(T)) {};
-
-        scalar(const void* baseAddr, std::size_t length) : data(baseAddr), size(length) {};
-
-        scalar() : data(NULL), size(0) {};
-
-        const void* data;
-        std::size_t size;
-    };
-
-    std::vector<VkBuffer>   buffers;
-    std::vector<scalar>     scalars;
-};
-
-
 enum {
     CLK_ADDRESS_NONE = 0x0000,
     CLK_ADDRESS_CLAMP_TO_EDGE = 0x0002,
@@ -171,7 +153,7 @@ VKAPI_ATTR VkBool32 VKAPI_CALL dbgFunc(VkDebugReportFlagsEXT msgFlags, VkDebugRe
      * That's what would happen without validation layers, so we'll
      * keep that behavior here.
      */
-    return false;
+    return VK_FALSE;
 }
 
 std::string read_csv_field(std::istream& in) {
@@ -734,16 +716,6 @@ int sample_main(int argc, char *argv[]) {
     std::vector<buffer> buffers;
     buffers.push_back(buffer(info, buffer_size));
     buffers.push_back(buffer(info, sizeof(fill_kernel_scalar_args)));
-
-    invocation_arguments arguments;
-    arguments.buffers.push_back(buffers[0].buf);
-    arguments.scalars.push_back(invocation_arguments::scalar(&scalar_args.inPitch));
-    arguments.scalars.push_back(invocation_arguments::scalar(&scalar_args.inDeviceFormat));
-    arguments.scalars.push_back(invocation_arguments::scalar(&scalar_args.inOffsetX));
-    arguments.scalars.push_back(invocation_arguments::scalar(&scalar_args.inOffsetY));
-    arguments.scalars.push_back(invocation_arguments::scalar(&scalar_args.inWidth));
-    arguments.scalars.push_back(invocation_arguments::scalar(&scalar_args.inHeight));
-    arguments.scalars.push_back(invocation_arguments::scalar(&scalar_args.inColor));
 
     // fill scalar args buffer with contents
     memcpy_buffer(info.device, buffers[1].mem, 0, sizeof(scalar_args), &scalar_args);
