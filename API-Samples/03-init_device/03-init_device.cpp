@@ -526,19 +526,19 @@ void submit_command(struct sample_info &info) {
 void init_compute_pipeline(struct sample_info &info, VkShaderModule shaderModule, const char* entryName, int workGroupSizeX, int workGroupSizeY) {
     const unsigned int num_workgroup_sizes = 3;
     const int32_t workGroupSizes[num_workgroup_sizes] = { workGroupSizeX, workGroupSizeY, 1 };
-    VkSpecializationMapEntry specializationEntries[num_workgroup_sizes] = {
+    const VkSpecializationMapEntry specializationEntries[num_workgroup_sizes] = {
             {
                     0,                          // specialization constant 0 - workgroup size X
                     0*sizeof(int32_t),          // offset - start of workGroupSizes array
                     sizeof(workGroupSizes[0])   // sizeof the first element
             },
             {
-                    1,                          // specialiation constant 1 - workgroup size Y
+                    1,                          // specialization constant 1 - workgroup size Y
                     1*sizeof(int32_t),            // offset - one element into the array
                     sizeof(workGroupSizes[1])   // sizeof the second element
             },
             {
-                    2,                          // specialiation constant 2 - workgroup size Z
+                    2,                          // specialization constant 2 - workgroup size Z
                     2*sizeof(int32_t),          // offset - two elements into the array
                     sizeof(workGroupSizes[2])   // sizeof the second element
             }
