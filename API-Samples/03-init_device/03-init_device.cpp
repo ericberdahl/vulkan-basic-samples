@@ -48,7 +48,7 @@ struct buffer {
     VkDeviceMemory  mem;
 };
 
-struct float4 {
+struct alignas(16) float4 {
     float x;
     float y;
     float z;
@@ -134,7 +134,6 @@ struct fill_kernel_scalar_args {
     int     inOffsetY;      // offset 12
     int     inWidth;        // offset 16
     int     inHeight;       // offset 20
-    int     unused[2];      // offset 24, 28
     float4  inColor;        // offset 32
 };
 static_assert(0 == offsetof(fill_kernel_scalar_args, inPitch), "inPitch offset incorrect");
@@ -687,7 +686,6 @@ int sample_main(int argc, char *argv[]) {
             0,                          // inOffsetY
             buffer_width,               // inWidth
             buffer_height,              // inHeight
-            {0,0},                      // unused
             { 0.25f, 0.50f, 0.75f, 1.0f }  // inColor
     };
     const std::size_t buffer_size = scalar_args.inPitch * scalar_args.inHeight * sizeof(float4);
