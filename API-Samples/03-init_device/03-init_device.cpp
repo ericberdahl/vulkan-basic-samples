@@ -319,16 +319,21 @@ void init_compute_queue_family_index(struct sample_info &info) {
 }
 
 void my_init_descriptor_pool(struct sample_info &info) {
-    VkDescriptorPoolSize type_count[2];
-    type_count[0].type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    type_count[0].descriptorCount = 4;
-    type_count[1].type = VK_DESCRIPTOR_TYPE_SAMPLER;
-    type_count[0].descriptorCount = 4;
+    const VkDescriptorPoolSize type_count[] = {
+            {
+                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,  // type
+                4                                   // descriptorCount
+            },
+            {
+                VK_DESCRIPTOR_TYPE_SAMPLER, // type
+                4                           // descriptorCount
+            }
+    };
 
     VkDescriptorPoolCreateInfo createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
     createInfo.maxSets = 2;
-    createInfo.poolSizeCount = 2;
+    createInfo.poolSizeCount = sizeof(type_count) / sizeof(type_count[0]);
     createInfo.pPoolSizes = type_count;
 
     VkResult U_ASSERT_ONLY res = vkCreateDescriptorPool(info.device, &createInfo, NULL, &info.desc_pool);
