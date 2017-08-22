@@ -34,6 +34,10 @@ create and destroy a Vulkan physical device
 #include <string>
 #include <util_init.hpp>
 
+#define KERNEL_SOURCE_GLSLC 1
+#define KERNEL_SOURCE_CLSPV 2
+#define KERNEL_SOURCE       KERNEL_SOURCE_GLSLC
+
 struct buffer {
     buffer() : device(VK_NULL_HANDLE), buf(VK_NULL_HANDLE), mem(VK_NULL_HANDLE) {};
     buffer(sample_info &info, VkDeviceSize num_bytes) : device(VK_NULL_HANDLE), buf(VK_NULL_HANDLE), mem(VK_NULL_HANDLE) {
@@ -633,7 +637,14 @@ void fill_command_buffer(struct sample_info &info, uint32_t groupCountX, uint32_
     execute_end_command_buffer(info);
 }
 
-void check_results(struct sample_info &info, VkDeviceMemory memory, int width, int height, int pitch, const float4& expected) {
+void check_results(struct sample_info &info,
+                   VkDeviceMemory   memory,
+                   int              width,
+                   int              height,
+                   int              pitch,
+                   const float4&    expected,
+                   bool             logIncorrect = true,
+                   bool             logCorrect = false) {
     void* data = NULL;
 
     unsigned int num_correct_pixels = 0;
@@ -650,10 +661,17 @@ void check_results(struct sample_info &info, VkDeviceMemory memory, int width, i
                 const bool pixel_is_correct = (*p == expected);
                 if (pixel_is_correct) {
                     ++num_correct_pixels;
+                    if (logCorrect) {
+                        LOGE("  CORRECT pixels{row:%d, col%d} = {x=%f, y=%f, z=%f, w=%f}", r, c,
+                             p->x, p->y, p->z, p->w);
+                    }
                 }
                 else {
                     ++num_incorrect_pixels;
-                    LOGE("pixels{row:%d, col%d} = {x=%f, y=%f, z=%f, w=%f}", r, c, p->x, p->y, p->z, p->w);
+                    if (logIncorrect) {
+                        LOGE("INCORRECT pixels{row:%d, col%d} = {x=%f, y=%f, z=%f, w=%f}", r, c,
+                             p->x, p->y, p->z, p->w);
+                    }
                 }
             }
         }
@@ -683,12 +701,14 @@ int sample_main(int argc, char *argv[]) {
     const int num_workgroups_y = (buffer_height + workgroup_size_y - 1) / workgroup_size_y;
 
     const char* const spv_module_mapname = "fills.spvmap";
-#if 0
+#if KERNEL_SOURCE == KERNEL_SOURCE_CLSPV
     const char* const spv_module_name = "fills.spv";
     const char* const spv_module_entry_point = "FillWithColorKernel";
-#else
+#elif KERNEL_SOURCE == KERNEL_SOURCE_GLSLC
     const char* const spv_module_name = "fills_glsl.spv";
     const char* const spv_module_entry_point = "main";
+#else
+    #error Unknown kernel source
 #endif
 
     struct sample_info info = {};
@@ -744,13 +764,6 @@ int sample_main(int argc, char *argv[]) {
 
     vkQueueWaitIdle(info.graphics_queue);
 
-    {
-        fill_kernel_scalar_args* data = NULL;
-        vkMapMemory(info.device, buffers[1].mem, 0, VK_WHOLE_SIZE, 0, reinterpret_cast<void**>(&data));
-        data->inColor.w = 0.0f;
-        vkUnmapMemory(info.device, buffers[1].mem);
-
-    }
     // examine result buffer contents
     check_results(info, buffers[0].mem, scalar_args.inWidth, scalar_args.inHeight, scalar_args.inPitch, scalar_args.inColor);
 
