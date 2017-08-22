@@ -34,13 +34,9 @@ create and destroy a Vulkan physical device
 #include <string>
 #include <util_init.hpp>
 
-#define KERNEL_SOURCE_GLSLC 1
-#define KERNEL_SOURCE_CLSPV 2
-#define KERNEL_SOURCE       KERNEL_SOURCE_GLSLC
-
 struct buffer {
     buffer() : device(VK_NULL_HANDLE), buf(VK_NULL_HANDLE), mem(VK_NULL_HANDLE) {};
-    buffer(sample_info &info, VkDeviceSize num_bytes) : device(VK_NULL_HANDLE), buf(VK_NULL_HANDLE), mem(VK_NULL_HANDLE) {
+    buffer(sample_info &info, VkDeviceSize num_bytes) : buffer() {
         allocate(info, num_bytes);
     };
 
@@ -759,15 +755,6 @@ int sample_main(int argc, char *argv[]) {
     };
 
     const char* const spv_module_mapname = "fills.spvmap";
-#if KERNEL_SOURCE == KERNEL_SOURCE_CLSPV
-    const char* const spv_module_name = "fills.spv";
-    const char* const spv_module_entry_point = "FillWithColorKernel";
-#elif KERNEL_SOURCE == KERNEL_SOURCE_GLSLC
-    const char* const spv_module_name = "fills_glsl.spv";
-    const char* const spv_module_entry_point = "main";
-#else
-    #error Unknown kernel source
-#endif
 
     struct sample_info info = {};
     init_global_layer_properties(info);
@@ -799,7 +786,8 @@ int sample_main(int argc, char *argv[]) {
     });
 
     // run one kernel
-    run_kernel(info, spv_module_name, spv_module_entry_point, samplers, scalar_args);
+    run_kernel(info, "fills_glsl.spv", "main", samplers, scalar_args);
+    run_kernel(info, "fills.spv", "FillWithColorKernel", samplers, scalar_args);
 
     //
     // Clean up
