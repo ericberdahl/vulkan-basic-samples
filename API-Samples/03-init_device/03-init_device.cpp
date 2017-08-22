@@ -648,7 +648,8 @@ void check_results(struct sample_info &info,
                    int              height,
                    int              pitch,
                    const float4&    expected,
-                   bool             logIncorrect = true,
+                   const char*      label,
+                   bool             logIncorrect = false,
                    bool             logCorrect = false) {
     void* data = NULL;
 
@@ -667,15 +668,15 @@ void check_results(struct sample_info &info,
                 if (pixel_is_correct) {
                     ++num_correct_pixels;
                     if (logCorrect) {
-                        LOGE("  CORRECT pixels{row:%d, col%d} = {x=%f, y=%f, z=%f, w=%f}", r, c,
-                             p->x, p->y, p->z, p->w);
+                        LOGE("%s:  CORRECT pixels{row:%d, col%d} = {x=%f, y=%f, z=%f, w=%f}",
+                             label, r, c, p->x, p->y, p->z, p->w);
                     }
                 }
                 else {
                     ++num_incorrect_pixels;
                     if (logIncorrect) {
-                        LOGE("INCORRECT pixels{row:%d, col%d} = {x=%f, y=%f, z=%f, w=%f}", r, c,
-                             p->x, p->y, p->z, p->w);
+                        LOGE("%s: INCORRECT pixels{row:%d, col%d} = {x=%f, y=%f, z=%f, w=%f}",
+                             label, r, c, p->x, p->y, p->z, p->w);
                     }
                 }
             }
@@ -683,7 +684,65 @@ void check_results(struct sample_info &info,
     }
     vkUnmapMemory(info.device, memory);
 
-    LOGE("Correct pixels=%d; Incorrect pixels=%d", num_correct_pixels, num_incorrect_pixels);
+    LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels, num_incorrect_pixels);
+}
+
+void run_kernel(sample_info&                    info,
+                const char*                     module_name,
+                const char*                     entry_point,
+                const std::vector<VkSampler>&   samplers,
+                const fill_kernel_scalar_args&  scalar_args) {
+    init_command_buffer(info);
+
+    const std::size_t buffer_size = scalar_args.inPitch * scalar_args.inHeight * sizeof(float4);
+
+    const int workgroup_size_x = 32;
+    const int workgroup_size_y = 32;
+    const int num_workgroups_x = (scalar_args.inWidth + workgroup_size_x - 1) / workgroup_size_x;
+    const int num_workgroups_y = (scalar_args.inHeight + workgroup_size_y - 1) / workgroup_size_y;
+
+    // create memory buffers
+    std::vector<buffer> buffers;
+    buffers.push_back(buffer(info, buffer_size));
+    buffers.push_back(buffer(info, sizeof(fill_kernel_scalar_args)));
+
+    // fill scalar args buffer with contents
+    memcpy_buffer(info.device, buffers[1].mem, 0, sizeof(scalar_args), &scalar_args);
+
+    // clear image buffer
+    memset_buffer(info.device, buffers[0].mem, 0, buffer_size, 0);
+
+    // We cannot use the shader support built into the sample framework because it is too tightly
+    // tied to a graphics pipeline. Instead, track our compute shader externally.
+    const VkShaderModule compute_shader = create_shader(info, module_name);
+
+    // create the pipeline
+    init_compute_pipeline(info, compute_shader, entry_point, workgroup_size_x,
+                          workgroup_size_y);
+
+    my_init_descriptor_set(info);
+    update_descriptor_sets(info, samplers, buffers);
+    fill_command_buffer(info, num_workgroups_x, num_workgroups_y, 1);
+    submit_command(info);
+
+    vkQueueWaitIdle(info.graphics_queue);
+
+    // examine result buffer contents
+    std::string label(module_name);
+    label += '/';
+    label += entry_point;
+    check_results(info, buffers[0].mem, scalar_args.inWidth, scalar_args.inHeight,
+                  scalar_args.inPitch, scalar_args.inColor, label.c_str());
+
+    VkResult U_ASSERT_ONLY res = vkFreeDescriptorSets(info.device, info.desc_pool, info.desc_set.size(), info.desc_set.data());
+    assert(res == VK_SUCCESS);
+
+    destroy_pipeline(info);
+    std::for_each(buffers.begin(), buffers.end(), std::mem_fun_ref(&buffer::reset));
+
+    vkDestroyShaderModule(info.device, compute_shader, NULL);
+
+    destroy_command_buffer(info);
 }
 
 int sample_main(int argc, char *argv[]) {
@@ -698,12 +757,6 @@ int sample_main(int argc, char *argv[]) {
             buffer_height,              // inHeight
             { 0.25f, 0.50f, 0.75f, 1.0f }  // inColor
     };
-    const std::size_t buffer_size = scalar_args.inPitch * scalar_args.inHeight * sizeof(float4);
-
-    const int workgroup_size_x = 32;
-    const int workgroup_size_y = 32;
-    const int num_workgroups_x = (buffer_width + workgroup_size_x - 1) / workgroup_size_x;
-    const int num_workgroups_y = (buffer_height + workgroup_size_y - 1) / workgroup_size_y;
 
     const char* const spv_module_mapname = "fills.spvmap";
 #if KERNEL_SOURCE == KERNEL_SOURCE_CLSPV
@@ -734,52 +787,23 @@ int sample_main(int argc, char *argv[]) {
     init_debug_report_callback(info, dbgFunc);
 
     init_command_pool(info);
-    init_command_buffer(info);
     my_init_descriptor_pool(info);
 
-    // We cannot use the shader support built into the sample framework because it is too tightly
-    // tied to a graphics pipeline. Instead, track our compute shader externally.
-    const VkShaderModule compute_shader = create_shader(info, spv_module_name);
+    // Parse the spvmap file and create the pipeline layout from that description
     const spv_map shader_arg_map = create_spv_map(spv_module_mapname);
+    init_compute_pipeline_layout(info, shader_arg_map);
 
     std::vector<VkSampler> samplers;
     std::transform(shader_arg_map.samplers.begin(), shader_arg_map.samplers.end(), std::back_inserter(samplers), [&info](const spv_map::sampler& s) {
         return create_compatible_sampler(info.device, s.opencl_flags);
     });
 
-    // create memory buffers
-    std::vector<buffer> buffers;
-    buffers.push_back(buffer(info, buffer_size));
-    buffers.push_back(buffer(info, sizeof(fill_kernel_scalar_args)));
-
-    // fill scalar args buffer with contents
-    memcpy_buffer(info.device, buffers[1].mem, 0, sizeof(scalar_args), &scalar_args);
-
-    // clear image buffer
-    memset_buffer(info.device, buffers[0].mem, 0, buffer_size, 0);
-
-    // create the pipeline
-    init_compute_pipeline_layout(info, shader_arg_map);
-    init_compute_pipeline(info, compute_shader, spv_module_entry_point, workgroup_size_x, workgroup_size_y);
-
-    my_init_descriptor_set(info);
-    update_descriptor_sets(info, samplers, buffers);
-    fill_command_buffer(info, num_workgroups_x, num_workgroups_y, 1);
-    submit_command(info);
-
-    vkQueueWaitIdle(info.graphics_queue);
-
-    // examine result buffer contents
-    check_results(info, buffers[0].mem, scalar_args.inWidth, scalar_args.inHeight, scalar_args.inPitch, scalar_args.inColor);
+    // run one kernel
+    run_kernel(info, spv_module_name, spv_module_entry_point, samplers, scalar_args);
 
     //
     // Clean up
     //
-
-    VkResult U_ASSERT_ONLY res = vkFreeDescriptorSets(info.device, info.desc_pool, info.desc_set.size(), info.desc_set.data());
-    assert(res == VK_SUCCESS);
-
-    destroy_pipeline(info);
 
     // Cannot use the descriptor set and pipeline layout destruction built into the sample framework
     // because it is too tightly tied to the graphics pipeline (e.g. hard-coding the number of
@@ -787,15 +811,12 @@ int sample_main(int argc, char *argv[]) {
     std::for_each(info.desc_layout.begin(), info.desc_layout.end(), std::bind(vkDestroyDescriptorSetLayout, info.device, std::placeholders::_1, nullptr));
     vkDestroyPipelineLayout(info.device, info.pipeline_layout, NULL);
 
-    std::for_each(buffers.begin(), buffers.end(), std::mem_fun_ref(&buffer::reset));
     std::for_each(samplers.begin(), samplers.end(), std::bind(vkDestroySampler, info.device, std::placeholders::_1, nullptr));
 
     // Cannot use the shader module desctruction built into the sampel framework because it is too
     // tightly tied to the graphics pipeline (e.g. hard-coding the number and type of shaders).
-    vkDestroyShaderModule(info.device, compute_shader, NULL);
 
     destroy_descriptor_pool(info);
-    destroy_command_buffer(info);
     destroy_command_pool(info);
     destroy_debug_report_callback(info);
     destroy_device(info);
