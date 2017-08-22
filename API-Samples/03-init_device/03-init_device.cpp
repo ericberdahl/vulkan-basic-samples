@@ -700,7 +700,7 @@ void run_kernel(sample_info&                    info,
     // create memory buffers
     std::vector<buffer> buffers;
     buffers.push_back(buffer(info, buffer_size));
-    buffers.push_back(buffer(info, sizeof(fill_kernel_scalar_args)));
+    buffers.push_back(buffer(info, sizeof(scalar_args)));
 
     // fill scalar args buffer with contents
     memcpy_buffer(info.device, buffers[1].mem, 0, sizeof(scalar_args), &scalar_args);
@@ -713,8 +713,7 @@ void run_kernel(sample_info&                    info,
     const VkShaderModule compute_shader = create_shader(info, module_name);
 
     // create the pipeline
-    init_compute_pipeline(info, compute_shader, entry_point, workgroup_size_x,
-                          workgroup_size_y);
+    init_compute_pipeline(info, compute_shader, entry_point, workgroup_size_x, workgroup_size_y);
 
     my_init_descriptor_set(info);
     update_descriptor_sets(info, samplers, buffers);
@@ -730,8 +729,12 @@ void run_kernel(sample_info&                    info,
     check_results(info, buffers[0].mem, scalar_args.inWidth, scalar_args.inHeight,
                   scalar_args.inPitch, scalar_args.inColor, label.c_str());
 
-    VkResult U_ASSERT_ONLY res = vkFreeDescriptorSets(info.device, info.desc_pool, info.desc_set.size(), info.desc_set.data());
+    VkResult U_ASSERT_ONLY res = vkFreeDescriptorSets(info.device,
+                                                      info.desc_pool,
+                                                      info.desc_set.size(),
+                                                      info.desc_set.data());
     assert(res == VK_SUCCESS);
+    info.desc_set.clear();
 
     destroy_pipeline(info);
     std::for_each(buffers.begin(), buffers.end(), std::mem_fun_ref(&buffer::reset));
