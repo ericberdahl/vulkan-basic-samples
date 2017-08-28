@@ -34,6 +34,16 @@ create and destroy a Vulkan physical device
 #include <string>
 #include <util_init.hpp>
 
+struct pipeline_layout {
+    pipeline_layout() : device(VK_NULL_HANDLE), descriptors(), pipeline(VK_NULL_HANDLE) {};
+
+    void    reset();
+
+    VkDevice                            device;
+    std::vector<VkDescriptorSetLayout>  descriptors;
+    VkPipelineLayout                    pipeline;
+};
+
 struct buffer {
     buffer() : device(VK_NULL_HANDLE), buf(VK_NULL_HANDLE), mem(VK_NULL_HANDLE) {};
     buffer(sample_info &info, VkDeviceSize num_bytes) : buffer() {
@@ -336,19 +346,26 @@ void my_init_descriptor_pool(struct sample_info &info) {
     assert(res == VK_SUCCESS);
 }
 
-void my_init_descriptor_set(struct sample_info &info) {
+std::vector<VkDescriptorSet> allocate_descriptor_set(VkDevice device, VkDescriptorPool pool, const pipeline_layout& layout) {
+    std::vector<VkDescriptorSet> result;
+
     VkDescriptorSetAllocateInfo createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    createInfo.descriptorPool = info.desc_pool;
-    createInfo.descriptorSetCount = info.desc_layout.size();
-    createInfo.pSetLayouts = info.desc_layout.data();
+    createInfo.descriptorPool = pool;
+    createInfo.descriptorSetCount = layout.descriptors.size();
+    createInfo.pSetLayouts = layout.descriptors.data();
 
-    info.desc_set.resize(createInfo.descriptorSetCount);
-    VkResult U_ASSERT_ONLY res = vkAllocateDescriptorSets(info.device, &createInfo, info.desc_set.data());
+    result.resize(createInfo.descriptorSetCount, VK_NULL_HANDLE);
+    VkResult U_ASSERT_ONLY res = vkAllocateDescriptorSets(device, &createInfo, result.data());
     assert(res == VK_SUCCESS);
+
+    return result;
 }
 
-void update_descriptor_sets(struct sample_info &info, const std::vector<VkSampler>& samplers, const std::vector<buffer>& buffers) {
+void update_descriptor_sets(VkDevice                            device,
+                            const std::vector<VkDescriptorSet>  descriptors,
+                            const std::vector<VkSampler>&       samplers,
+                            const std::vector<buffer>&          buffers) {
     VkWriteDescriptorSet baseWriteSet = {};
     baseWriteSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     baseWriteSet.descriptorCount = 1;
@@ -361,7 +378,7 @@ void update_descriptor_sets(struct sample_info &info, const std::vector<VkSample
     std::vector<VkDescriptorImageInfo> imageInfo(samplers.size(), baseImageInfo);
     for (int i = 0; i < samplers.size(); ++i) imageInfo[i].sampler = samplers[i];
 
-    baseWriteSet.dstSet = info.desc_set[0];
+    baseWriteSet.dstSet = descriptors[0];
     baseWriteSet.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
     writeSets.resize(samplers.size(), baseWriteSet);
     for (int i = 0; i < samplers.size(); ++i) {
@@ -377,7 +394,7 @@ void update_descriptor_sets(struct sample_info &info, const std::vector<VkSample
     std::vector<VkDescriptorBufferInfo> bufferInfo(buffers.size(), baseBufferInfo);
     for (int i = 0; i < buffers.size(); ++i) bufferInfo[i].buffer = buffers[i].buf;
 
-    baseWriteSet.dstSet = info.desc_set[1];
+    baseWriteSet.dstSet = descriptors[1];
     baseWriteSet.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
     auto prevSize = writeSets.size();
     writeSets.resize(prevSize + buffers.size(), baseWriteSet);
@@ -386,11 +403,11 @@ void update_descriptor_sets(struct sample_info &info, const std::vector<VkSample
         writeSets[i + prevSize].pBufferInfo = &bufferInfo[i];
     }
 
-    vkUpdateDescriptorSets(info.device, writeSets.size(), writeSets.data(), 0, NULL);
+    vkUpdateDescriptorSets(device, writeSets.size(), writeSets.data(), 0, NULL);
 
 }
 
-VkShaderModule create_shader(struct sample_info &info, const char* spvFileName) {
+VkShaderModule create_shader(VkDevice device, const char* spvFileName) {
     std::FILE* spv_file = AndroidFopen(spvFileName, "rb");
     assert(spv_file != NULL);
 
@@ -409,13 +426,11 @@ VkShaderModule create_shader(struct sample_info &info, const char* spvFileName) 
 
     VkShaderModuleCreateInfo shaderModuleCreateInfo = {};
     shaderModuleCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    shaderModuleCreateInfo.pNext = NULL;
-    shaderModuleCreateInfo.flags = 0;
     shaderModuleCreateInfo.codeSize = num_bytes;
     shaderModuleCreateInfo.pCode = spvModule.data();
 
     VkShaderModule shaderModule = VK_NULL_HANDLE;
-    VkResult U_ASSERT_ONLY res = vkCreateShaderModule(info.device, &shaderModuleCreateInfo, NULL, &shaderModule);
+    VkResult U_ASSERT_ONLY res = vkCreateShaderModule(device, &shaderModuleCreateInfo, NULL, &shaderModule);
     assert(res == VK_SUCCESS);
 
     return shaderModule;
@@ -446,6 +461,40 @@ VkDescriptorSetLayout create_descriptor_set_layout(VkDevice device, int numBindi
     return result;
 }
 
+
+void pipeline_layout::reset() {
+    std::for_each(descriptors.begin(), descriptors.end(), std::bind(vkDestroyDescriptorSetLayout, device, std::placeholders::_1, nullptr));
+    descriptors.clear();
+
+    if (VK_NULL_HANDLE != device && VK_NULL_HANDLE != pipeline) {
+        vkDestroyPipelineLayout(device, pipeline, NULL);
+    }
+
+    device = VK_NULL_HANDLE;
+    pipeline = VK_NULL_HANDLE;
+}
+
+uint32_t find_compatible_memory_index(const VkPhysicalDeviceMemoryProperties& memory_properties,
+                                      uint32_t   typeBits,
+                                      VkFlags    requirements_mask) {
+    uint32_t result = std::numeric_limits<uint32_t>::max();
+    assert(memory_properties.memoryTypeCount < std::numeric_limits<uint32_t>::max());
+
+    // Search memtypes to find first index with those properties
+    for (uint32_t i = 0; i < memory_properties.memoryTypeCount; i++) {
+        if ((typeBits & 1) == 1) {
+            // Type is available, does it match user properties?
+            if ((memory_properties.memoryTypes[i].propertyFlags & requirements_mask) == requirements_mask) {
+                result = i;
+                break;
+            }
+        }
+        typeBits >>= 1;
+    }
+
+    return result;
+}
+
 void buffer::allocate(sample_info &info, VkDeviceSize inNumBytes) {
     reset();
 
@@ -469,10 +518,10 @@ void buffer::allocate(sample_info &info, VkDeviceSize inNumBytes) {
     VkMemoryAllocateInfo alloc_info = {};
     alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
     alloc_info.allocationSize = mem_reqs.size;
-    bool U_ASSERT_ONLY pass = memory_type_from_properties(info, mem_reqs.memoryTypeBits,
-                                       VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT,
-                                       &alloc_info.memoryTypeIndex);
-    assert(pass && "No mappable, coherent memory");
+    alloc_info.memoryTypeIndex = find_compatible_memory_index(info.memory_properties,
+                                                              mem_reqs.memoryTypeBits,
+                                                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    assert(alloc_info.memoryTypeIndex < std::numeric_limits<uint32_t>::max() && "No mappable, coherent memory");
     res = vkAllocateMemory(device, &alloc_info, NULL, &mem);
     assert(res == VK_SUCCESS);
 
@@ -494,41 +543,49 @@ void buffer::reset() {
     device = VK_NULL_HANDLE;
 }
 
-void init_compute_pipeline_layout(struct sample_info &info, const spv_map& spvMap) {
-    info.desc_layout.clear();
+pipeline_layout init_compute_pipeline_layout(VkDevice device, const spv_map& spvMap) {
+    pipeline_layout result;
+    result.device = device;
 
     const int num_samplers = spvMap.samplers.size();
     if (0 < num_samplers) {
-        info.desc_layout.push_back(create_descriptor_set_layout(info.device, num_samplers,
-                                                                VK_DESCRIPTOR_TYPE_SAMPLER));
+        result.descriptors.push_back(create_descriptor_set_layout(device, num_samplers,
+                                                                  VK_DESCRIPTOR_TYPE_SAMPLER));
     }
 
     for (auto &nb : count_kernel_bindings(spvMap)) {
-        info.desc_layout.push_back(create_descriptor_set_layout(info.device, nb,
-                                                                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER));
+        result.descriptors.push_back(create_descriptor_set_layout(device, nb,
+                                                                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER));
     };
 
     VkPipelineLayoutCreateInfo createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    createInfo.setLayoutCount = info.desc_layout.size();
-    createInfo.pSetLayouts = createInfo.setLayoutCount ? info.desc_layout.data() : NULL;
+    createInfo.setLayoutCount = result.descriptors.size();
+    createInfo.pSetLayouts = createInfo.setLayoutCount ? result.descriptors.data() : NULL;
 
-    VkResult U_ASSERT_ONLY res = vkCreatePipelineLayout(info.device, &createInfo, NULL, &info.pipeline_layout);
+    VkResult U_ASSERT_ONLY res = vkCreatePipelineLayout(device, &createInfo, NULL, &result.pipeline);
     assert(res == VK_SUCCESS);
+
+    return result;
 }
 
-void submit_command(struct sample_info &info) {
+void submit_command(VkCommandBuffer command, VkQueue queue) {
     VkSubmitInfo submitInfo = {};
     submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
     submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &info.cmd;
+    submitInfo.pCommandBuffers = &command;
 
-    VkResult U_ASSERT_ONLY res = vkQueueSubmit(info.graphics_queue, 1, &submitInfo, VK_NULL_HANDLE);
+    VkResult U_ASSERT_ONLY res = vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE);
     assert(res == VK_SUCCESS);
 
 }
 
-void init_compute_pipeline(struct sample_info &info, VkShaderModule shaderModule, const char* entryName, int workGroupSizeX, int workGroupSizeY) {
+VkPipeline init_compute_pipeline(VkDevice                 device,
+                                 const pipeline_layout&   layout,
+                                 VkShaderModule           shaderModule,
+                                 const char*              entryName,
+                                 int                      workGroupSizeX,
+                                 int                      workGroupSizeY) {
     const unsigned int num_workgroup_sizes = 3;
     const int32_t workGroupSizes[num_workgroup_sizes] = { workGroupSizeX, workGroupSizeY, 1 };
     const VkSpecializationMapEntry specializationEntries[num_workgroup_sizes] = {
@@ -556,7 +613,7 @@ void init_compute_pipeline(struct sample_info &info, VkShaderModule shaderModule
 
     VkComputePipelineCreateInfo createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    createInfo.layout = info.pipeline_layout;
+    createInfo.layout = layout.pipeline;
 
     createInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
     createInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
@@ -564,8 +621,11 @@ void init_compute_pipeline(struct sample_info &info, VkShaderModule shaderModule
     createInfo.stage.pName = entryName;
     createInfo.stage.pSpecializationInfo = &specializationInfo;
 
-    VkResult U_ASSERT_ONLY res = vkCreateComputePipelines(info.device, VK_NULL_HANDLE, 1, &createInfo, NULL, &info.pipeline);
+    VkPipeline result = VK_NULL_HANDLE;
+    VkResult U_ASSERT_ONLY res = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &createInfo, NULL, &result);
     assert(res == VK_SUCCESS);
+
+    return result;
 }
 
 VkSampler create_compatible_sampler(VkDevice device, int opencl_flags) {
@@ -607,39 +667,63 @@ VkSampler create_compatible_sampler(VkDevice device, int opencl_flags) {
     return result;
 }
 
-void memset_buffer(VkDevice device, VkDeviceMemory memory, VkDeviceSize offset, VkDeviceSize size, int value) {
+void memset_buffer(const buffer& buf, VkDeviceSize offset, VkDeviceSize size, int value) {
     void* data = NULL;
-    VkResult U_ASSERT_ONLY res = vkMapMemory(device, memory, offset, size, 0, &data);
+    VkResult U_ASSERT_ONLY res = vkMapMemory(buf.device, buf.mem, offset, size, 0, &data);
     assert(res == VK_SUCCESS);
     memset(data, 0, size);
-    vkUnmapMemory(device, memory);
+    vkUnmapMemory(buf.device, buf.mem);
 }
 
-void memcpy_buffer(VkDevice device, VkDeviceMemory memory, VkDeviceSize offset, VkDeviceSize size, const void* source) {
+void memcpy_buffer(const buffer& buf, VkDeviceSize offset, VkDeviceSize size, const void* source) {
     void* data = NULL;
-    VkResult U_ASSERT_ONLY res = vkMapMemory(device, memory, offset, size, 0, &data);
+    VkResult U_ASSERT_ONLY res = vkMapMemory(buf.device, buf.mem, offset, size, 0, &data);
     assert(res == VK_SUCCESS);
     memcpy(data, source, size);
-    vkUnmapMemory(device, memory);
+    vkUnmapMemory(buf.device, buf.mem);
 }
 
-void fill_command_buffer(struct sample_info &info, uint32_t groupCountX, uint32_t groupCountY, uint32_t groupCountZ) {
-    execute_begin_command_buffer(info);
-    vkCmdBindPipeline(info.cmd, VK_PIPELINE_BIND_POINT_COMPUTE, info.pipeline);
+VkCommandBuffer allocate_command_buffer(VkDevice device, VkCommandPool cmd_pool) {
+    VkCommandBufferAllocateInfo allocInfo = {};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+    allocInfo.commandPool = cmd_pool;
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = 1;
 
-    vkCmdBindDescriptorSets(info.cmd, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            info.pipeline_layout,
+    VkCommandBuffer result = VK_NULL_HANDLE;
+    VkResult U_ASSERT_ONLY res = vkAllocateCommandBuffers(device, &allocInfo, &result);
+    assert(res == VK_SUCCESS);
+
+    return result;
+}
+
+void fill_command_buffer(VkCommandBuffer    command,
+                         VkPipeline         pipeline,
+                         VkPipelineLayout   layout,
+                         const std::vector<VkDescriptorSet>& descriptors,
+                         uint32_t           groupCountX,
+                         uint32_t           groupCountY,
+                         uint32_t           groupCountZ) {
+    VkCommandBufferBeginInfo beginInfo = {};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    VkResult U_ASSERT_ONLY res = vkBeginCommandBuffer(command, &beginInfo);
+    assert(res == VK_SUCCESS);
+
+    vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+
+    vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            layout,
                             0,
-                            info.desc_set.size(), info.desc_set.data(),
+                            descriptors.size(), descriptors.data(),
                             0, NULL);
 
-    // NOTE: Current logic is inefficient, 1 work item per work group
-    vkCmdDispatch(info.cmd, groupCountX, groupCountY, groupCountZ);
-    execute_end_command_buffer(info);
+    vkCmdDispatch(command, groupCountX, groupCountY, groupCountZ);
+
+    res = vkEndCommandBuffer(command);
+    assert(res == VK_SUCCESS);
 }
 
-void check_results(struct sample_info &info,
-                   VkDeviceMemory   memory,
+void check_results(const buffer&    buf,
                    int              width,
                    int              height,
                    int              pitch,
@@ -651,7 +735,7 @@ void check_results(struct sample_info &info,
 
     unsigned int num_correct_pixels = 0;
     unsigned int num_incorrect_pixels = 0;
-    VkResult U_ASSERT_ONLY res = vkMapMemory(info.device, memory, 0, VK_WHOLE_SIZE, 0, &data);
+    VkResult U_ASSERT_ONLY res = vkMapMemory(buf.device, buf.mem, 0, VK_WHOLE_SIZE, 0, &data);
     assert(res == VK_SUCCESS);
     {
         const float4* pixels = static_cast<const float4*>(data);
@@ -678,7 +762,7 @@ void check_results(struct sample_info &info,
             }
         }
     }
-    vkUnmapMemory(info.device, memory);
+    vkUnmapMemory(buf.device, buf.mem);
 
     LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels, num_incorrect_pixels);
 }
@@ -686,9 +770,19 @@ void check_results(struct sample_info &info,
 void run_kernel(sample_info&                    info,
                 const char*                     module_name,
                 const char*                     entry_point,
+                const char*                     spvmap_name,
                 const std::vector<VkSampler>&   samplers,
                 const fill_kernel_scalar_args&  scalar_args) {
-    init_command_buffer(info);
+    const VkDevice device               = info.device;
+    const VkQueue compute_queue         = info.graphics_queue;
+    const VkDescriptorPool desc_pool    = info.desc_pool;
+    const VkCommandPool cmd_pool        = info.cmd_pool;
+
+    // Parse the spvmap file and create the pipeline layout from that description
+    const spv_map shader_arg_map = create_spv_map(spvmap_name);
+    pipeline_layout layout = init_compute_pipeline_layout(device, shader_arg_map);
+
+    const VkCommandBuffer command = allocate_command_buffer(device, cmd_pool);
 
     const std::size_t buffer_size = scalar_args.inPitch * scalar_args.inHeight * sizeof(float4);
 
@@ -703,45 +797,56 @@ void run_kernel(sample_info&                    info,
     buffers.push_back(buffer(info, sizeof(scalar_args)));
 
     // fill scalar args buffer with contents
-    memcpy_buffer(info.device, buffers[1].mem, 0, sizeof(scalar_args), &scalar_args);
+    memcpy_buffer(buffers[1], 0, sizeof(scalar_args), &scalar_args);
 
     // clear image buffer
-    memset_buffer(info.device, buffers[0].mem, 0, buffer_size, 0);
+    memset_buffer(buffers[0], 0, buffer_size, 0);
 
     // We cannot use the shader support built into the sample framework because it is too tightly
     // tied to a graphics pipeline. Instead, track our compute shader externally.
-    const VkShaderModule compute_shader = create_shader(info, module_name);
+    const VkShaderModule compute_shader = create_shader(device, module_name);
 
     // create the pipeline
-    init_compute_pipeline(info, compute_shader, entry_point, workgroup_size_x, workgroup_size_y);
+    const VkPipeline pipeline = init_compute_pipeline(device,
+                                                      layout,
+                                                      compute_shader,
+                                                      entry_point,
+                                                      workgroup_size_x,
+                                                      workgroup_size_y);
 
-    my_init_descriptor_set(info);
-    update_descriptor_sets(info, samplers, buffers);
-    fill_command_buffer(info, num_workgroups_x, num_workgroups_y, 1);
-    submit_command(info);
+    const auto descriptors = allocate_descriptor_set(device, desc_pool, layout);
 
-    vkQueueWaitIdle(info.graphics_queue);
+    update_descriptor_sets(device, descriptors, samplers, buffers);
+    fill_command_buffer(command,
+                        pipeline,
+                        layout.pipeline,
+                        descriptors,
+                        num_workgroups_x, num_workgroups_y, 1);
+    submit_command(command, compute_queue);
+
+    vkQueueWaitIdle(compute_queue);
 
     // examine result buffer contents
     std::string label(module_name);
     label += '/';
     label += entry_point;
-    check_results(info, buffers[0].mem, scalar_args.inWidth, scalar_args.inHeight,
+    check_results(buffers[0], scalar_args.inWidth, scalar_args.inHeight,
                   scalar_args.inPitch, scalar_args.inColor, label.c_str());
 
-    VkResult U_ASSERT_ONLY res = vkFreeDescriptorSets(info.device,
-                                                      info.desc_pool,
-                                                      info.desc_set.size(),
-                                                      info.desc_set.data());
+    VkResult U_ASSERT_ONLY res = vkFreeDescriptorSets(device,
+                                                      desc_pool,
+                                                      descriptors.size(),
+                                                      descriptors.data());
     assert(res == VK_SUCCESS);
-    info.desc_set.clear();
 
-    destroy_pipeline(info);
+    vkDestroyPipeline(device, pipeline, NULL);
+
     std::for_each(buffers.begin(), buffers.end(), std::mem_fun_ref(&buffer::reset));
 
-    vkDestroyShaderModule(info.device, compute_shader, NULL);
+    vkDestroyShaderModule(device, compute_shader, NULL);
+    vkFreeCommandBuffers(device, cmd_pool, 1, &command);
 
-    destroy_command_buffer(info);
+    layout.reset();
 }
 
 int sample_main(int argc, char *argv[]) {
@@ -779,10 +884,6 @@ int sample_main(int argc, char *argv[]) {
     init_command_pool(info);
     my_init_descriptor_pool(info);
 
-    // Parse the spvmap file and create the pipeline layout from that description
-    const spv_map shader_arg_map = create_spv_map(spv_module_mapname);
-    init_compute_pipeline_layout(info, shader_arg_map);
-
     // This sample presumes that all OpenCL C kernels were compiled with the same samplermap file,
     // whose contents and order are statically known to the application. Thus, the app can create
     // a set of compatible samplers thusly.
@@ -798,18 +899,12 @@ int sample_main(int argc, char *argv[]) {
                    std::bind(create_compatible_sampler, info.device, std::placeholders::_1));
 
     // run one kernel
-    run_kernel(info, "fills_glsl.spv", "main", samplers, scalar_args);
-    run_kernel(info, "fills.spv", "FillWithColorKernel", samplers, scalar_args);
+    run_kernel(info, "fills_glsl.spv", "main", "fills.spvmap", samplers, scalar_args);
+    run_kernel(info, "fills.spv", "FillWithColorKernel", "fills.spvmap", samplers, scalar_args);
 
     //
     // Clean up
     //
-
-    // Cannot use the descriptor set and pipeline layout destruction built into the sample framework
-    // because it is too tightly tied to the graphics pipeline (e.g. hard-coding the number of
-    // descriptor set layouts).
-    std::for_each(info.desc_layout.begin(), info.desc_layout.end(), std::bind(vkDestroyDescriptorSetLayout, info.device, std::placeholders::_1, nullptr));
-    vkDestroyPipelineLayout(info.device, info.pipeline_layout, NULL);
 
     std::for_each(samplers.begin(), samplers.end(), std::bind(vkDestroySampler, info.device, std::placeholders::_1, nullptr));
 
