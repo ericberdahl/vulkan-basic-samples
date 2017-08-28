@@ -783,10 +783,19 @@ int sample_main(int argc, char *argv[]) {
     const spv_map shader_arg_map = create_spv_map(spv_module_mapname);
     init_compute_pipeline_layout(info, shader_arg_map);
 
+    // This sample presumes that all OpenCL C kernels were compiled with the same samplermap file,
+    // whose contents and order are statically known to the application. Thus, the app can create
+    // a set of compatible samplers thusly.
+    const int sampler_flags[] = {
+            CLK_ADDRESS_CLAMP_TO_EDGE   | CLK_FILTER_LINEAR     | CLK_NORMALIZED_COORDS_FALSE,
+            CLK_ADDRESS_CLAMP_TO_EDGE   | CLK_FILTER_NEAREST    | CLK_NORMALIZED_COORDS_FALSE,
+            CLK_ADDRESS_NONE            | CLK_FILTER_NEAREST    | CLK_NORMALIZED_COORDS_FALSE,
+            CLK_ADDRESS_CLAMP_TO_EDGE   | CLK_FILTER_LINEAR     | CLK_NORMALIZED_COORDS_TRUE
+    };
     std::vector<VkSampler> samplers;
-    std::transform(shader_arg_map.samplers.begin(), shader_arg_map.samplers.end(), std::back_inserter(samplers), [&info](const spv_map::sampler& s) {
-        return create_compatible_sampler(info.device, s.opencl_flags);
-    });
+    std::transform(std::begin(sampler_flags), std::end(sampler_flags),
+                   std::back_inserter(samplers),
+                   std::bind(create_compatible_sampler, info.device, std::placeholders::_1));
 
     // run one kernel
     run_kernel(info, "fills_glsl.spv", "main", samplers, scalar_args);
