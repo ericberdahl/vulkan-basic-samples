@@ -365,7 +365,7 @@ std::vector<VkDescriptorSet> allocate_descriptor_set(VkDevice device, VkDescript
 void update_descriptor_sets(VkDevice                            device,
                             const std::vector<VkDescriptorSet>  descriptors,
                             const std::vector<VkSampler>&       samplers,
-                            const std::vector<buffer>&          buffers) {
+                            const std::vector<VkBuffer>&        buffers) {
     VkWriteDescriptorSet baseWriteSet = {};
     baseWriteSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
     baseWriteSet.descriptorCount = 1;
@@ -392,7 +392,7 @@ void update_descriptor_sets(VkDevice                            device,
     baseBufferInfo.offset = 0;
     baseBufferInfo.range = VK_WHOLE_SIZE;
     std::vector<VkDescriptorBufferInfo> bufferInfo(buffers.size(), baseBufferInfo);
-    for (int i = 0; i < buffers.size(); ++i) bufferInfo[i].buffer = buffers[i].buf;
+    for (int i = 0; i < buffers.size(); ++i) bufferInfo[i].buffer = buffers[i];
 
     baseWriteSet.dstSet = descriptors[1];
     baseWriteSet.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
@@ -580,14 +580,17 @@ void submit_command(VkCommandBuffer command, VkQueue queue) {
 
 }
 
-VkPipeline init_compute_pipeline(VkDevice                 device,
-                                 const pipeline_layout&   layout,
-                                 VkShaderModule           shaderModule,
-                                 const char*              entryName,
-                                 int                      workGroupSizeX,
-                                 int                      workGroupSizeY) {
+VkPipeline init_compute_pipeline(VkDevice                   device,
+                                 const pipeline_layout&     layout,
+                                 VkShaderModule             shaderModule,
+                                 const char*                entryName,
+                                 const std::tuple<int,int>& work_group_sizes) {
     const unsigned int num_workgroup_sizes = 3;
-    const int32_t workGroupSizes[num_workgroup_sizes] = { workGroupSizeX, workGroupSizeY, 1 };
+    const int32_t workGroupSizes[num_workgroup_sizes] = {
+            std::get<0>(work_group_sizes),
+            std::get<1>(work_group_sizes),
+            1
+    };
     const VkSpecializationMapEntry specializationEntries[num_workgroup_sizes] = {
             {
                     0,                          // specialization constant 0 - workgroup size X
@@ -701,9 +704,7 @@ void fill_command_buffer(VkCommandBuffer    command,
                          VkPipeline         pipeline,
                          VkPipelineLayout   layout,
                          const std::vector<VkDescriptorSet>& descriptors,
-                         uint32_t           groupCountX,
-                         uint32_t           groupCountY,
-                         uint32_t           groupCountZ) {
+                         const std::tuple<int,int>& num_workgroups) {
     VkCommandBufferBeginInfo beginInfo = {};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
     VkResult U_ASSERT_ONLY res = vkBeginCommandBuffer(command, &beginInfo);
@@ -717,20 +718,20 @@ void fill_command_buffer(VkCommandBuffer    command,
                             descriptors.size(), descriptors.data(),
                             0, NULL);
 
-    vkCmdDispatch(command, groupCountX, groupCountY, groupCountZ);
+    vkCmdDispatch(command, std::get<0>(num_workgroups), std::get<1>(num_workgroups), 1);
 
     res = vkEndCommandBuffer(command);
     assert(res == VK_SUCCESS);
 }
 
-void check_results(const buffer&    buf,
-                   int              width,
-                   int              height,
-                   int              pitch,
-                   const float4&    expected,
-                   const char*      label,
-                   bool             logIncorrect = false,
-                   bool             logCorrect = false) {
+void check_fill_results(const buffer&    buf,
+                        int              width,
+                        int              height,
+                        int              pitch,
+                        const float4&    expected,
+                        const char*      label,
+                        bool             logIncorrect = false,
+                        bool             logCorrect = false) {
     void* data = NULL;
 
     unsigned int num_correct_pixels = 0;
@@ -771,8 +772,10 @@ void run_kernel(sample_info&                    info,
                 const char*                     module_name,
                 const char*                     entry_point,
                 const char*                     spvmap_name,
+                const std::tuple<int,int>&      workgroup_sizes,
+                const std::tuple<int,int>&      num_workgroups,
                 const std::vector<VkSampler>&   samplers,
-                const fill_kernel_scalar_args&  scalar_args) {
+                const std::vector<VkBuffer>&    buffers) {
     const VkDevice device               = info.device;
     const VkQueue compute_queue         = info.graphics_queue;
     const VkDescriptorPool desc_pool    = info.desc_pool;
@@ -784,24 +787,6 @@ void run_kernel(sample_info&                    info,
 
     const VkCommandBuffer command = allocate_command_buffer(device, cmd_pool);
 
-    const std::size_t buffer_size = scalar_args.inPitch * scalar_args.inHeight * sizeof(float4);
-
-    const int workgroup_size_x = 32;
-    const int workgroup_size_y = 32;
-    const int num_workgroups_x = (scalar_args.inWidth + workgroup_size_x - 1) / workgroup_size_x;
-    const int num_workgroups_y = (scalar_args.inHeight + workgroup_size_y - 1) / workgroup_size_y;
-
-    // create memory buffers
-    std::vector<buffer> buffers;
-    buffers.push_back(buffer(info, buffer_size));
-    buffers.push_back(buffer(info, sizeof(scalar_args)));
-
-    // fill scalar args buffer with contents
-    memcpy_buffer(buffers[1], 0, sizeof(scalar_args), &scalar_args);
-
-    // clear image buffer
-    memset_buffer(buffers[0], 0, buffer_size, 0);
-
     // We cannot use the shader support built into the sample framework because it is too tightly
     // tied to a graphics pipeline. Instead, track our compute shader externally.
     const VkShaderModule compute_shader = create_shader(device, module_name);
@@ -811,8 +796,7 @@ void run_kernel(sample_info&                    info,
                                                       layout,
                                                       compute_shader,
                                                       entry_point,
-                                                      workgroup_size_x,
-                                                      workgroup_size_y);
+                                                      workgroup_sizes);
 
     const auto descriptors = allocate_descriptor_set(device, desc_pool, layout);
 
@@ -821,17 +805,10 @@ void run_kernel(sample_info&                    info,
                         pipeline,
                         layout.pipeline,
                         descriptors,
-                        num_workgroups_x, num_workgroups_y, 1);
+                        num_workgroups);
     submit_command(command, compute_queue);
 
     vkQueueWaitIdle(compute_queue);
-
-    // examine result buffer contents
-    std::string label(module_name);
-    label += '/';
-    label += entry_point;
-    check_results(buffers[0], scalar_args.inWidth, scalar_args.inHeight,
-                  scalar_args.inPitch, scalar_args.inColor, label.c_str());
 
     VkResult U_ASSERT_ONLY res = vkFreeDescriptorSets(device,
                                                       desc_pool,
@@ -841,17 +818,16 @@ void run_kernel(sample_info&                    info,
 
     vkDestroyPipeline(device, pipeline, NULL);
 
-    std::for_each(buffers.begin(), buffers.end(), std::mem_fun_ref(&buffer::reset));
-
     vkDestroyShaderModule(device, compute_shader, NULL);
     vkFreeCommandBuffers(device, cmd_pool, 1, &command);
 
     layout.reset();
 }
 
-int sample_main(int argc, char *argv[]) {
+void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& samplers) {
     const int buffer_height = 64;
     const int buffer_width = 64;
+
     const fill_kernel_scalar_args scalar_args = {
             buffer_width,               // inPitch
             1,                          // inDeviceFormat - kDevicePixelFormat_BGRA_4444_32f
@@ -862,8 +838,36 @@ int sample_main(int argc, char *argv[]) {
             { 0.25f, 0.50f, 0.75f, 1.0f }  // inColor
     };
 
-    const char* const spv_module_mapname = "fills.spvmap";
+    const std::size_t buffer_size = scalar_args.inPitch * scalar_args.inHeight * sizeof(float4);
 
+    // fill scalar args buffer with contents
+    buffer scalar_buffer(info, sizeof(scalar_args));
+    memcpy_buffer(scalar_buffer, 0, sizeof(scalar_args), &scalar_args);
+
+    // allocate image buffer
+    buffer image_buffer(info, buffer_size);
+
+    const auto workgroup_sizes = std::make_tuple(32, 32);
+    const auto num_workgroups = std::make_tuple((scalar_args.inWidth + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
+                                                (scalar_args.inHeight + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
+
+    std::vector<VkBuffer> data_buffers = { image_buffer.buf, scalar_buffer.buf };
+
+    memset_buffer(image_buffer, 0, buffer_size, 0);
+    run_kernel(info, "fills_glsl.spv", "main", "fills.spvmap", workgroup_sizes, num_workgroups, samplers, data_buffers);
+    check_fill_results(image_buffer, scalar_args.inWidth, scalar_args.inHeight,
+                       scalar_args.inPitch, scalar_args.inColor, "fills_glsl.spv/main");
+
+    memset_buffer(image_buffer, 0, buffer_size, 0);
+    run_kernel(info, "fills.spv", "FillWithColorKernel", "fills.spvmap", workgroup_sizes, num_workgroups, samplers, data_buffers);
+    check_fill_results(image_buffer, scalar_args.inWidth, scalar_args.inHeight,
+                       scalar_args.inPitch, scalar_args.inColor, "fills.spv/FillWithColorKernel");
+
+    scalar_buffer.reset();
+    image_buffer.reset();
+}
+
+int sample_main(int argc, char *argv[]) {
     struct sample_info info = {};
     init_global_layer_properties(info);
 
@@ -898,9 +902,7 @@ int sample_main(int argc, char *argv[]) {
                    std::back_inserter(samplers),
                    std::bind(create_compatible_sampler, info.device, std::placeholders::_1));
 
-    // run one kernel
-    run_kernel(info, "fills_glsl.spv", "main", "fills.spvmap", samplers, scalar_args);
-    run_kernel(info, "fills.spv", "FillWithColorKernel", "fills.spvmap", samplers, scalar_args);
+    run_fill_kernel(info, samplers);
 
     //
     // Clean up
