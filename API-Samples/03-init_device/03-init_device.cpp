@@ -75,9 +75,9 @@ struct spv_map {
 
     struct kernel {
         struct arg {
-            enum kind_t { kind_pod, kind_buffer, kind_image, kind_sampler };
+            enum kind_t { kind_unknown, kind_pod, kind_buffer, kind_ro_image, kind_wo_image, kind_sampler };
 
-            arg() : kind(kind_pod), binding(-1), offset(0) {};
+            arg() : kind(kind_unknown), binding(-1), offset(0) {};
 
             kind_t  kind;
             int     binding;
@@ -90,6 +90,9 @@ struct spv_map {
         int                 descriptor_set;
         std::vector<arg>    args;
     };
+
+    static kernel::arg::kind_t parse_argType(const std::string& argType);
+    static spv_map   parse(std::istream& in);
 
     spv_map() : samplers(), kernels() {};
 
@@ -172,7 +175,29 @@ std::string read_csv_field(std::istream& in) {
     return result;
 }
 
-spv_map create_spv_map(std::istream& in) {
+spv_map::kernel::arg::kind_t spv_map::parse_argType(const std::string& argType) {
+    kernel::arg::kind_t result = kernel::arg::kind_unknown;
+
+    if (argType == "pod") {
+        result = kernel::arg::kind_pod;
+    }
+    else if (argType == "buffer") {
+        result = kernel::arg::kind_buffer;
+    }
+    else if (argType == "ro_image") {
+        result = kernel::arg::kind_ro_image;
+    }
+    else if (argType == "wo_image") {
+        result = kernel::arg::kind_wo_image;
+    }
+    else if (argType == "sampler") {
+        result = kernel::arg::kind_sampler;
+    }
+
+    return result;
+}
+
+spv_map spv_map::parse(std::istream& in) {
     spv_map result;
 
     while (!in.eof()) {
@@ -246,6 +271,9 @@ spv_map create_spv_map(std::istream& in) {
                 else if ("offset" == key) {
                     ka->offset = std::atoi(value.c_str());
                 }
+                else if ("argType" == key) {
+                    ka->kind = parse_argType(value);
+                }
             }
         }
     }
@@ -265,7 +293,7 @@ spv_map create_spv_map(const char* spvmapFilename) {
 
     // parse the spvmap file contents
     std::istringstream in(buffer);
-    return create_spv_map(in);
+    return spv_map::parse(in);
 }
 
 std::vector<int> count_kernel_bindings(const spv_map& spvMap) {
