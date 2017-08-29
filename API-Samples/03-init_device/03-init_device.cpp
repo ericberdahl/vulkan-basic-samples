@@ -75,17 +75,20 @@ struct spv_map {
 
     struct kernel {
         struct arg {
-            arg() : binding(-1), offset(0) {};
+            enum kind_t { kind_pod, kind_buffer, kind_image, kind_sampler };
 
-            int binding;
-            int offset;
+            arg() : kind(kind_pod), binding(-1), offset(0) {};
+
+            kind_t  kind;
+            int     binding;
+            int     offset;
         };
 
         kernel() : name(), descriptor_set(-1), args() {};
 
-        std::string             name;
-        int                     descriptor_set;
-        std::vector<arg> args;
+        std::string         name;
+        int                 descriptor_set;
+        std::vector<arg>    args;
     };
 
     spv_map() : samplers(), kernels() {};
@@ -118,23 +121,6 @@ bool operator==(const float4& l, const float4& r) {
 bool operator!=(const float4& l, const float4& r) {
     return !(l == r);
 }
-
-struct fill_kernel_scalar_args {
-    int     inPitch;        // offset 0
-    int     inDeviceFormat; // DevicePixelFormat offset 4
-    int     inOffsetX;      // offset 8
-    int     inOffsetY;      // offset 12
-    int     inWidth;        // offset 16
-    int     inHeight;       // offset 20
-    float4  inColor;        // offset 32
-};
-static_assert(0 == offsetof(fill_kernel_scalar_args, inPitch), "inPitch offset incorrect");
-static_assert(4 == offsetof(fill_kernel_scalar_args, inDeviceFormat), "inDeviceFormat offset incorrect");
-static_assert(8 == offsetof(fill_kernel_scalar_args, inOffsetX), "inOffsetX offset incorrect");
-static_assert(12 == offsetof(fill_kernel_scalar_args, inOffsetY), "inOffsetY offset incorrect");
-static_assert(16 == offsetof(fill_kernel_scalar_args, inWidth), "inWidth offset incorrect");
-static_assert(20 == offsetof(fill_kernel_scalar_args, inHeight), "inHeight offset incorrect");
-static_assert(32 == offsetof(fill_kernel_scalar_args, inColor), "inColor offset incorrect");
 
 VKAPI_ATTR VkBool32 VKAPI_CALL dbgFunc(VkDebugReportFlagsEXT msgFlags, VkDebugReportObjectTypeEXT objType, uint64_t srcObject,
                                        size_t location, int32_t msgCode, const char *pLayerPrefix, const char *pMsg,
@@ -396,7 +382,7 @@ void update_descriptor_sets(VkDevice                            device,
 
     baseWriteSet.dstSet = descriptors[1];
     baseWriteSet.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    auto prevSize = writeSets.size();
+    const auto prevSize = writeSets.size();
     writeSets.resize(prevSize + buffers.size(), baseWriteSet);
     for (int i = 0; i < buffers.size(); ++i) {
         writeSets[i + prevSize].dstBinding = i;
@@ -824,9 +810,61 @@ void run_kernel(sample_info&                    info,
     layout.reset();
 }
 
+void run_kernel(sample_info&                    info,
+                const char*                     module_name,
+                const char*                     entry_point,
+                const char*                     spvmap_name,
+                const std::tuple<int,int>&      workgroup_sizes,
+                const std::tuple<int,int>&      num_workgroups,
+                const std::vector<VkSampler>&   samplers,
+                const std::vector<VkBuffer>&    buffers,
+                const void*                     scalars,
+                std::size_t                     scalar_size) {
+    buffer scalar_args(info, scalar_size);
+    memcpy_buffer(scalar_args, 0, scalar_size, scalars);
+
+    std::vector<VkBuffer> args = buffers;
+    args.push_back(scalar_args.buf);
+
+    run_kernel(info, module_name, entry_point, spvmap_name, workgroup_sizes, num_workgroups,
+               samplers, args);
+
+    scalar_args.reset();
+}
+
+template <typename Args>
+void run_kernel(sample_info&                    info,
+                const char*                     module_name,
+                const char*                     entry_point,
+                const char*                     spvmap_name,
+                const std::tuple<int,int>&      workgroup_sizes,
+                const std::tuple<int,int>&      num_workgroups,
+                const std::vector<VkSampler>&   samplers,
+                const std::vector<VkBuffer>&    buffers,
+                const Args&                     scalars) {
+    run_kernel(info, module_name, entry_point, spvmap_name, workgroup_sizes, num_workgroups, samplers, buffers, &scalars, sizeof(scalars));
+}
+
 void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& samplers) {
     const int buffer_height = 64;
     const int buffer_width = 64;
+
+    struct fill_kernel_scalar_args {
+        int     inPitch;        // offset 0
+        int     inDeviceFormat; // DevicePixelFormat offset 4
+        int     inOffsetX;      // offset 8
+        int     inOffsetY;      // offset 12
+        int     inWidth;        // offset 16
+        int     inHeight;       // offset 20
+        float4  inColor;        // offset 32
+    };
+    static_assert(0 == offsetof(fill_kernel_scalar_args, inPitch), "inPitch offset incorrect");
+    static_assert(4 == offsetof(fill_kernel_scalar_args, inDeviceFormat), "inDeviceFormat offset incorrect");
+    static_assert(8 == offsetof(fill_kernel_scalar_args, inOffsetX), "inOffsetX offset incorrect");
+    static_assert(12 == offsetof(fill_kernel_scalar_args, inOffsetY), "inOffsetY offset incorrect");
+    static_assert(16 == offsetof(fill_kernel_scalar_args, inWidth), "inWidth offset incorrect");
+    static_assert(20 == offsetof(fill_kernel_scalar_args, inHeight), "inHeight offset incorrect");
+    static_assert(32 == offsetof(fill_kernel_scalar_args, inColor), "inColor offset incorrect");
 
     const fill_kernel_scalar_args scalar_args = {
             buffer_width,               // inPitch
@@ -838,32 +876,26 @@ void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sam
             { 0.25f, 0.50f, 0.75f, 1.0f }  // inColor
     };
 
-    const std::size_t buffer_size = scalar_args.inPitch * scalar_args.inHeight * sizeof(float4);
-
-    // fill scalar args buffer with contents
-    buffer scalar_buffer(info, sizeof(scalar_args));
-    memcpy_buffer(scalar_buffer, 0, sizeof(scalar_args), &scalar_args);
-
     // allocate image buffer
+    const std::size_t buffer_size = scalar_args.inPitch * scalar_args.inHeight * sizeof(float4);
     buffer image_buffer(info, buffer_size);
 
     const auto workgroup_sizes = std::make_tuple(32, 32);
     const auto num_workgroups = std::make_tuple((scalar_args.inWidth + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
                                                 (scalar_args.inHeight + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
 
-    std::vector<VkBuffer> data_buffers = { image_buffer.buf, scalar_buffer.buf };
+    std::vector<VkBuffer> data_buffers = { image_buffer.buf };
 
     memset_buffer(image_buffer, 0, buffer_size, 0);
-    run_kernel(info, "fills_glsl.spv", "main", "fills.spvmap", workgroup_sizes, num_workgroups, samplers, data_buffers);
+    run_kernel(info, "fills_glsl.spv", "main", "fills.spvmap", workgroup_sizes, num_workgroups, samplers, data_buffers, scalar_args);
     check_fill_results(image_buffer, scalar_args.inWidth, scalar_args.inHeight,
                        scalar_args.inPitch, scalar_args.inColor, "fills_glsl.spv/main");
 
     memset_buffer(image_buffer, 0, buffer_size, 0);
-    run_kernel(info, "fills.spv", "FillWithColorKernel", "fills.spvmap", workgroup_sizes, num_workgroups, samplers, data_buffers);
+    run_kernel(info, "fills.spv", "FillWithColorKernel", "fills.spvmap", workgroup_sizes, num_workgroups, samplers, data_buffers, scalar_args);
     check_fill_results(image_buffer, scalar_args.inWidth, scalar_args.inHeight,
                        scalar_args.inPitch, scalar_args.inColor, "fills.spv/FillWithColorKernel");
 
-    scalar_buffer.reset();
     image_buffer.reset();
 }
 
