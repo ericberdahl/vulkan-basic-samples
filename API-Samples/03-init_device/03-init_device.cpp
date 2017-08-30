@@ -111,11 +111,10 @@ struct kernel_params {
         VkImageView         image;
     };
 
-    kernel_params() : samplerDescriptorSet(VK_NULL_HANDLE), literalSamplers(), argDescriptorSet(VK_NULL_HANDLE), arguments() {};
+    kernel_params() : literalSamplers(), arguments() {}
+    kernel_params(const kernel_params& other) : literalSamplers(other.literalSamplers), arguments(other.arguments) {}
 
-    VkDescriptorSet         samplerDescriptorSet;
     std::vector<VkSampler>  literalSamplers;
-    VkDescriptorSet         argDescriptorSet;
     std::vector<arg>        arguments;
 };
 
@@ -431,6 +430,8 @@ std::vector<VkDescriptorSet> allocate_descriptor_set(VkDevice device, VkDescript
 }
 
 void update_descriptor_sets(VkDevice                device,
+                            VkDescriptorSet         samplerDescriptorSet,
+                            VkDescriptorSet         argDescriptorSet,
                             const kernel_params&    params) {
     std::vector<VkDescriptorImageInfo>  imageList;
     std::vector<VkDescriptorBufferInfo> bufferList;
@@ -451,9 +452,14 @@ void update_descriptor_sets(VkDevice                device,
     for (auto& a : params.arguments) {
         switch (a.type) {
             case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
-            case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-                assert(0 && "not yet implemented");
+            case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE: {
+                VkDescriptorImageInfo imageInfo = {};
+                imageInfo.imageView = a.image;
+                imageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+                imageList.push_back(imageInfo);
                 break;
+            }
 
             case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: {
                 VkDescriptorBufferInfo bufferInfo = {};
@@ -494,7 +500,7 @@ void update_descriptor_sets(VkDevice                device,
 
     VkWriteDescriptorSet literalSamplerSet = {};
     literalSamplerSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    literalSamplerSet.dstSet = params.samplerDescriptorSet;
+    literalSamplerSet.dstSet = samplerDescriptorSet;
     literalSamplerSet.dstBinding = 0;
     literalSamplerSet.descriptorCount = 1;
     literalSamplerSet.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
@@ -514,7 +520,7 @@ void update_descriptor_sets(VkDevice                device,
 
     VkWriteDescriptorSet argSet = {};
     argSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    argSet.dstSet = params.argDescriptorSet;
+    argSet.dstSet = argDescriptorSet;
     argSet.dstBinding = 0;
     argSet.descriptorCount = 1;
 
@@ -522,7 +528,9 @@ void update_descriptor_sets(VkDevice                device,
         switch (a.type) {
             case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
             case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-                assert(0 && "not yet implemented");
+                argSet.descriptorType = a.type;
+                argSet.pImageInfo = &(*nextImage);
+                ++nextImage;
                 break;
 
             case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
@@ -920,8 +928,7 @@ void run_kernel(sample_info&                    info,
                 const char*                     kernel_name,
                 const std::tuple<int,int>&      workgroup_sizes,
                 const std::tuple<int,int>&      num_workgroups,
-                const std::vector<VkSampler>&   samplers,
-                const std::vector<VkBuffer>&    buffers) {
+                const kernel_params&            params) {
     const VkDevice device               = info.device;
     const VkQueue compute_queue         = info.graphics_queue;
     const VkDescriptorPool desc_pool    = info.desc_pool;
@@ -956,15 +963,9 @@ void run_kernel(sample_info&                    info,
 
     const auto descriptors = allocate_descriptor_set(device, desc_pool, layout);
 
-    kernel_params params;
-    params.samplerDescriptorSet = descriptors[0];
-    params.argDescriptorSet = descriptors[kernel_arg_map->descriptor_set];
-    params.literalSamplers = samplers;
-    for (auto b : buffers) {
-        params.arguments.push_back(kernel_params::arg::buffer_arg(b));
-    }
-
-    update_descriptor_sets(device, params);
+    update_descriptor_sets(device,
+                           descriptors[0], descriptors[kernel_arg_map->descriptor_set],
+                           params);
     fill_command_buffer(command,
                         pipeline,
                         layout.pipeline,
@@ -995,21 +996,20 @@ void run_kernel(sample_info&                    info,
                 const char*                     kernel_name,
                 const std::tuple<int,int>&      workgroup_sizes,
                 const std::tuple<int,int>&      num_workgroups,
-                const std::vector<VkSampler>&   samplers,
-                const std::vector<VkBuffer>&    buffers,
+                const kernel_params&            params,
                 const void*                     scalars,
                 std::size_t                     scalar_size) {
     buffer scalar_args(info, scalar_size);
     memcpy_buffer(scalar_args, 0, scalar_size, scalars);
 
-    std::vector<VkBuffer> args = buffers;
-    args.push_back(scalar_args.buf);
+    kernel_params real_params(params);
+    real_params.arguments.push_back(kernel_params::arg::buffer_arg(scalar_args.buf));
 
     run_kernel(info,
                module_name, entry_point,
                spvmap_name, kernel_name,
                workgroup_sizes, num_workgroups,
-               samplers, args);
+               real_params);
 
     scalar_args.reset();
 }
@@ -1022,14 +1022,13 @@ void run_kernel(sample_info&                    info,
                 const char*                     kernel_name,
                 const std::tuple<int,int>&      workgroup_sizes,
                 const std::tuple<int,int>&      num_workgroups,
-                const std::vector<VkSampler>&   samplers,
-                const std::vector<VkBuffer>&    buffers,
+                const kernel_params&            params,
                 const Args&                     scalars) {
     run_kernel(info,
                module_name, entry_point,
                spvmap_name, kernel_name,
                workgroup_sizes, num_workgroups,
-               samplers, buffers,
+               params,
                &scalars, sizeof(scalars));
 }
 
@@ -1072,14 +1071,16 @@ void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sam
     const auto num_workgroups = std::make_tuple((scalar_args.inWidth + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
                                                 (scalar_args.inHeight + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
 
-    std::vector<VkBuffer> data_buffers = { image_buffer.buf };
+    kernel_params params;
+    params.literalSamplers = samplers;
+    params.arguments.push_back(kernel_params::arg::buffer_arg(image_buffer.buf));
 
     memset_buffer(image_buffer, 0, buffer_size, 0);
     run_kernel(info,
                "fills_glsl.spv", "main",
                "fills.spvmap", "FillWithColorKernel",
                workgroup_sizes, num_workgroups,
-               samplers, data_buffers,
+               params,
                scalar_args);
     check_fill_results(image_buffer, scalar_args.inWidth, scalar_args.inHeight,
                        scalar_args.inPitch, scalar_args.inColor, "fills_glsl.spv/main");
@@ -1089,7 +1090,7 @@ void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sam
                "fills.spv", "FillWithColorKernel",
                "fills.spvmap", NULL,
                workgroup_sizes, num_workgroups,
-               samplers, data_buffers,
+               params,
                scalar_args);
     check_fill_results(image_buffer, scalar_args.inWidth, scalar_args.inHeight,
                        scalar_args.inPitch, scalar_args.inColor, "fills.spv/FillWithColorKernel");
