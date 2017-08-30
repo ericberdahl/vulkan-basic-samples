@@ -111,8 +111,9 @@ struct kernel_params {
         VkImageView         image;
     };
 
-    kernel_params() : literalSamplers(), argDescriptorSet(VK_NULL_HANDLE), arguments() {};
+    kernel_params() : samplerDescriptorSet(VK_NULL_HANDLE), literalSamplers(), argDescriptorSet(VK_NULL_HANDLE), arguments() {};
 
+    VkDescriptorSet         samplerDescriptorSet;
     std::vector<VkSampler>  literalSamplers;
     VkDescriptorSet         argDescriptorSet;
     std::vector<arg>        arguments;
