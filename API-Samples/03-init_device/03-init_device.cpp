@@ -430,72 +430,126 @@ std::vector<VkDescriptorSet> allocate_descriptor_set(VkDevice device, VkDescript
     return result;
 }
 
-void update_descriptor_sets(VkDevice                        device,
-                            VkDescriptorSet                 literal_sampler_set,
-                            const std::vector<VkSampler>&   literal_samplers,
-                            VkDescriptorSet                 argument_set,
-                            const std::vector<VkBuffer>&    buffers) {
-    std::vector<VkWriteDescriptorSet> writeSets;
+void update_descriptor_sets(VkDevice                device,
+                            const kernel_params&    params) {
+    std::vector<VkDescriptorImageInfo>  imageList;
+    std::vector<VkDescriptorBufferInfo> bufferList;
 
     //
-    // Update the literal samplers' descriptor set
-    // Literal samplers are always written to descriptor set 0
+    // Collect information about the literal samplers
     //
-
-    std::vector<VkDescriptorImageInfo> literalSamplerInfo;
-    literalSamplerInfo.reserve(literal_samplers.size());
-    for (auto s : literal_samplers) {
+    for (auto s : params.literalSamplers) {
         VkDescriptorImageInfo samplerInfo = {};
         samplerInfo.sampler = s;
 
-        literalSamplerInfo.push_back(samplerInfo);
+        imageList.push_back(samplerInfo);
     }
 
-    writeSets.reserve(writeSets.size() + literal_samplers.size());
-    for (int i = 0; i < literal_samplers.size(); ++i) {
-        VkWriteDescriptorSet literalSamplerSet = {};
-        literalSamplerSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        literalSamplerSet.dstSet = literal_sampler_set;
-        literalSamplerSet.dstBinding = i;
-        literalSamplerSet.descriptorCount = 1;
-        literalSamplerSet.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-        literalSamplerSet.pImageInfo = &literalSamplerInfo[i];
+    //
+    // Collect information about the arguments
+    //
+    for (auto& a : params.arguments) {
+        switch (a.type) {
+            case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+            case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+                assert(0 && "not yet implemented");
+                break;
+
+            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: {
+                VkDescriptorBufferInfo bufferInfo = {};
+                bufferInfo.range = VK_WHOLE_SIZE;
+                bufferInfo.buffer = a.buffer;
+
+                bufferList.push_back(bufferInfo);
+                break;
+            }
+
+            case VK_DESCRIPTOR_TYPE_SAMPLER: {
+                VkDescriptorImageInfo samplerInfo = {};
+                samplerInfo.sampler = a.sampler;
+
+                imageList.push_back(samplerInfo);
+                break;
+            }
+
+            default:
+                assert(0 && "unkown argument type");
+        }
+    }
+
+    //
+    // Set up to create the descriptor set write structures
+    // We will iterate the param lists in the same order,
+    // picking up image and buffer infos in order.
+    //
+
+    std::vector<VkWriteDescriptorSet> writeSets;
+    auto nextImage = imageList.begin();
+    auto nextBuffer = bufferList.begin();
+
+
+    //
+    // Update the literal samplers' descriptor set
+    //
+
+    VkWriteDescriptorSet literalSamplerSet = {};
+    literalSamplerSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    literalSamplerSet.dstSet = params.samplerDescriptorSet;
+    literalSamplerSet.dstBinding = 0;
+    literalSamplerSet.descriptorCount = 1;
+    literalSamplerSet.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+
+    for (auto s : params.literalSamplers) {
+        literalSamplerSet.pImageInfo = &(*nextImage);
+        ++nextImage;
 
         writeSets.push_back(literalSamplerSet);
+
+        ++literalSamplerSet.dstBinding;
     }
 
     //
     // Update the kernel's argument descriptor set
     //
 
-    std::vector<VkDescriptorBufferInfo> argBufferInfo;
-    argBufferInfo.reserve(buffers.size());
-    for (auto b : buffers) {
-        VkDescriptorBufferInfo bufferInfo = {};
-        bufferInfo.range = VK_WHOLE_SIZE;
-        bufferInfo.buffer = b;
+    VkWriteDescriptorSet argSet = {};
+    argSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    argSet.dstSet = params.argDescriptorSet;
+    argSet.dstBinding = 0;
+    argSet.descriptorCount = 1;
 
-        argBufferInfo.push_back(bufferInfo);
-    }
+    for (auto& a : params.arguments) {
+        switch (a.type) {
+            case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+            case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+                assert(0 && "not yet implemented");
+                break;
 
-    writeSets.reserve(writeSets.size() + buffers.size());
-    for (int i = 0; i < buffers.size(); ++i) {
-        VkWriteDescriptorSet argSet = {};
-        argSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-        argSet.dstSet = argument_set;
-        argSet.dstBinding = i;
-        argSet.descriptorCount = 1;
-        argSet.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-        argSet.pBufferInfo = &argBufferInfo[i];
+            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+                argSet.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                argSet.pBufferInfo = &(*nextBuffer);
+                ++nextBuffer;
+                break;
+
+            case VK_DESCRIPTOR_TYPE_SAMPLER:
+                argSet.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+                literalSamplerSet.pImageInfo = &(*nextImage);
+                ++nextImage;
+                break;
+
+            default:
+                assert(0 && "unkown argument type");
+        }
 
         writeSets.push_back(argSet);
+
+        ++argSet.dstBinding;
     }
 
     //
     // Do the actual descriptor set updates
     //
     vkUpdateDescriptorSets(device, writeSets.size(), writeSets.data(), 0, nullptr);
-
 }
 
 VkShaderModule create_shader(VkDevice device, const char* spvFileName) {
@@ -902,9 +956,15 @@ void run_kernel(sample_info&                    info,
 
     const auto descriptors = allocate_descriptor_set(device, desc_pool, layout);
 
-    update_descriptor_sets(device,
-                           descriptors[0], samplers,
-                           descriptors[kernel_arg_map->descriptor_set], buffers);
+    kernel_params params;
+    params.samplerDescriptorSet = descriptors[0];
+    params.argDescriptorSet = descriptors[kernel_arg_map->descriptor_set];
+    params.literalSamplers = samplers;
+    for (auto b : buffers) {
+        params.arguments.push_back(kernel_params::arg::buffer_arg(b));
+    }
+
+    update_descriptor_sets(device, params);
     fill_command_buffer(command,
                         pipeline,
                         layout.pipeline,
