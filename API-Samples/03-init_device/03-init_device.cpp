@@ -65,6 +65,23 @@ struct alignas(16) float4 {
     float w;
 };
 
+struct kernel_params {
+    struct arg {
+        arg() : type(VK_DESCRIPTOR_TYPE_MAX_ENUM), buffer(VK_NULL_HANDLE), sampler(VK_NULL_HANDLE), image(VK_NULL_HANDLE) {};
+
+        VkDescriptorType    type;
+        VkBuffer            buffer;
+        VkSampler           sampler;
+        VkImageView         image;
+    };
+
+    kernel_params() : literalSamplers(), argDescriptorSet(VK_NULL_HANDLE), arguments() {};
+
+    std::vector<VkSampler>  literalSamplers;
+    VkDescriptorSet         argDescriptorSet;
+    std::vector<arg>        arguments;
+};
+
 struct spv_map {
     struct sampler {
         sampler() : opencl_flags(0), binding(-1) {};
@@ -73,17 +90,17 @@ struct spv_map {
         int binding;
     };
 
+    struct arg {
+        enum kind_t { kind_unknown, kind_pod, kind_buffer, kind_ro_image, kind_wo_image, kind_sampler };
+
+        arg() : kind(kind_unknown), binding(-1), offset(0) {};
+
+        kind_t  kind;
+        int     binding;
+        int     offset;
+    };
+
     struct kernel {
-        struct arg {
-            enum kind_t { kind_unknown, kind_pod, kind_buffer, kind_ro_image, kind_wo_image, kind_sampler };
-
-            arg() : kind(kind_unknown), binding(-1), offset(0) {};
-
-            kind_t  kind;
-            int     binding;
-            int     offset;
-        };
-
         kernel() : name(), descriptor_set(-1), args() {};
 
         std::string         name;
@@ -91,7 +108,7 @@ struct spv_map {
         std::vector<arg>    args;
     };
 
-    static kernel::arg::kind_t parse_argType(const std::string& argType);
+    static arg::kind_t parse_argType(const std::string& argType);
     static spv_map   parse(std::istream& in);
 
     spv_map() : samplers(), kernels() {};
@@ -175,23 +192,23 @@ std::string read_csv_field(std::istream& in) {
     return result;
 }
 
-spv_map::kernel::arg::kind_t spv_map::parse_argType(const std::string& argType) {
-    kernel::arg::kind_t result = kernel::arg::kind_unknown;
+spv_map::arg::kind_t spv_map::parse_argType(const std::string& argType) {
+    arg::kind_t result = arg::kind_unknown;
 
     if (argType == "pod") {
-        result = kernel::arg::kind_pod;
+        result = arg::kind_pod;
     }
     else if (argType == "buffer") {
-        result = kernel::arg::kind_buffer;
+        result = arg::kind_buffer;
     }
     else if (argType == "ro_image") {
-        result = kernel::arg::kind_ro_image;
+        result = arg::kind_ro_image;
     }
     else if (argType == "wo_image") {
-        result = kernel::arg::kind_wo_image;
+        result = arg::kind_wo_image;
     }
     else if (argType == "sampler") {
-        result = kernel::arg::kind_sampler;
+        result = arg::kind_sampler;
     }
 
     return result;
@@ -248,7 +265,7 @@ spv_map spv_map::parse(std::istream& in) {
                     const int arg_index = std::atoi(value.c_str());
 
                     if (kernel->args.size() <= arg_index) {
-                        ka = kernel->args.insert(ka, arg_index - kernel->args.size() + 1, spv_map::kernel::arg());
+                        ka = kernel->args.insert(ka, arg_index - kernel->args.size() + 1, spv_map::arg());
                     }
                     else {
                         ka = std::next(kernel->args.begin(), arg_index);
@@ -300,7 +317,7 @@ std::vector<int> count_kernel_bindings(const spv_map& spvMap) {
     std::vector<int> result;
 
     for (auto &k : spvMap.kernels) {
-        auto max_arg = std::max_element(k.args.begin(), k.args.end(), [](const spv_map::kernel::arg& a, const spv_map::kernel::arg& b) {
+        auto max_arg = std::max_element(k.args.begin(), k.args.end(), [](const spv_map::arg& a, const spv_map::arg& b) {
             return a.binding < b.binding;
         });
 
@@ -376,48 +393,71 @@ std::vector<VkDescriptorSet> allocate_descriptor_set(VkDevice device, VkDescript
     return result;
 }
 
-void update_descriptor_sets(VkDevice                            device,
-                            const std::vector<VkDescriptorSet>  descriptors,
-                            const std::vector<VkSampler>&       samplers,
-                            const std::vector<VkBuffer>&        buffers) {
-    VkWriteDescriptorSet baseWriteSet = {};
-    baseWriteSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    baseWriteSet.descriptorCount = 1;
-
+void update_descriptor_sets(VkDevice                        device,
+                            VkDescriptorSet                 literal_sampler_set,
+                            const std::vector<VkSampler>&   literal_samplers,
+                            VkDescriptorSet                 argument_set,
+                            const std::vector<VkBuffer>&    buffers) {
     std::vector<VkWriteDescriptorSet> writeSets;
 
-    // Update the samplers
+    //
+    // Update the literal samplers' descriptor set
+    // Literal samplers are always written to descriptor set 0
+    //
 
-    VkDescriptorImageInfo baseImageInfo = {};
-    std::vector<VkDescriptorImageInfo> imageInfo(samplers.size(), baseImageInfo);
-    for (int i = 0; i < samplers.size(); ++i) imageInfo[i].sampler = samplers[i];
+    std::vector<VkDescriptorImageInfo> literalSamplerInfo;
+    literalSamplerInfo.reserve(literal_samplers.size());
+    for (auto s : literal_samplers) {
+        VkDescriptorImageInfo samplerInfo = {};
+        samplerInfo.sampler = s;
 
-    baseWriteSet.dstSet = descriptors[0];
-    baseWriteSet.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-    writeSets.resize(samplers.size(), baseWriteSet);
-    for (int i = 0; i < samplers.size(); ++i) {
-        writeSets[i].dstBinding = i;
-        writeSets[i].pImageInfo = &imageInfo[i];
+        literalSamplerInfo.push_back(samplerInfo);
     }
 
-    // Update the buffers
+    writeSets.reserve(writeSets.size() + literal_samplers.size());
+    for (int i = 0; i < literal_samplers.size(); ++i) {
+        VkWriteDescriptorSet literalSamplerSet = {};
+        literalSamplerSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        literalSamplerSet.dstSet = literal_sampler_set;
+        literalSamplerSet.dstBinding = i;
+        literalSamplerSet.descriptorCount = 1;
+        literalSamplerSet.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+        literalSamplerSet.pImageInfo = &literalSamplerInfo[i];
 
-    VkDescriptorBufferInfo baseBufferInfo = {};
-    baseBufferInfo.offset = 0;
-    baseBufferInfo.range = VK_WHOLE_SIZE;
-    std::vector<VkDescriptorBufferInfo> bufferInfo(buffers.size(), baseBufferInfo);
-    for (int i = 0; i < buffers.size(); ++i) bufferInfo[i].buffer = buffers[i];
+        writeSets.push_back(literalSamplerSet);
+    }
 
-    baseWriteSet.dstSet = descriptors[1];
-    baseWriteSet.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    const auto prevSize = writeSets.size();
-    writeSets.resize(prevSize + buffers.size(), baseWriteSet);
+    //
+    // Update the kernel's argument descriptor set
+    //
+
+    std::vector<VkDescriptorBufferInfo> argBufferInfo;
+    argBufferInfo.reserve(buffers.size());
+    for (auto b : buffers) {
+        VkDescriptorBufferInfo bufferInfo = {};
+        bufferInfo.range = VK_WHOLE_SIZE;
+        bufferInfo.buffer = b;
+
+        argBufferInfo.push_back(bufferInfo);
+    }
+
+    writeSets.reserve(writeSets.size() + buffers.size());
     for (int i = 0; i < buffers.size(); ++i) {
-        writeSets[i + prevSize].dstBinding = i;
-        writeSets[i + prevSize].pBufferInfo = &bufferInfo[i];
+        VkWriteDescriptorSet argSet = {};
+        argSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        argSet.dstSet = argument_set;
+        argSet.dstBinding = i;
+        argSet.descriptorCount = 1;
+        argSet.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        argSet.pBufferInfo = &argBufferInfo[i];
+
+        writeSets.push_back(argSet);
     }
 
-    vkUpdateDescriptorSets(device, writeSets.size(), writeSets.data(), 0, NULL);
+    //
+    // Do the actual descriptor set updates
+    //
+    vkUpdateDescriptorSets(device, writeSets.size(), writeSets.data(), 0, nullptr);
 
 }
 
@@ -786,6 +826,7 @@ void run_kernel(sample_info&                    info,
                 const char*                     module_name,
                 const char*                     entry_point,
                 const char*                     spvmap_name,
+                const char*                     kernel_name,
                 const std::tuple<int,int>&      workgroup_sizes,
                 const std::tuple<int,int>&      num_workgroups,
                 const std::vector<VkSampler>&   samplers,
@@ -795,8 +836,18 @@ void run_kernel(sample_info&                    info,
     const VkDescriptorPool desc_pool    = info.desc_pool;
     const VkCommandPool cmd_pool        = info.cmd_pool;
 
-    // Parse the spvmap file and create the pipeline layout from that description
+    if (!kernel_name) kernel_name = entry_point;
+
+    // Parse the spvmap file
     const spv_map shader_arg_map = create_spv_map(spvmap_name);
+    const auto kernel_arg_map = std::find_if(shader_arg_map.kernels.begin(),
+                                             shader_arg_map.kernels.end(),
+                                             [kernel_name](const spv_map::kernel& k) {
+                                                 return k.name == kernel_name;
+                                             });
+    assert(kernel_arg_map != shader_arg_map.kernels.end());
+
+    // Create the pipeline layout from the spvmap description
     pipeline_layout layout = init_compute_pipeline_layout(device, shader_arg_map);
 
     const VkCommandBuffer command = allocate_command_buffer(device, cmd_pool);
@@ -814,7 +865,9 @@ void run_kernel(sample_info&                    info,
 
     const auto descriptors = allocate_descriptor_set(device, desc_pool, layout);
 
-    update_descriptor_sets(device, descriptors, samplers, buffers);
+    update_descriptor_sets(device,
+                           descriptors[0], samplers,
+                           descriptors[kernel_arg_map->descriptor_set], buffers);
     fill_command_buffer(command,
                         pipeline,
                         layout.pipeline,
@@ -842,6 +895,7 @@ void run_kernel(sample_info&                    info,
                 const char*                     module_name,
                 const char*                     entry_point,
                 const char*                     spvmap_name,
+                const char*                     kernel_name,
                 const std::tuple<int,int>&      workgroup_sizes,
                 const std::tuple<int,int>&      num_workgroups,
                 const std::vector<VkSampler>&   samplers,
@@ -854,7 +908,10 @@ void run_kernel(sample_info&                    info,
     std::vector<VkBuffer> args = buffers;
     args.push_back(scalar_args.buf);
 
-    run_kernel(info, module_name, entry_point, spvmap_name, workgroup_sizes, num_workgroups,
+    run_kernel(info,
+               module_name, entry_point,
+               spvmap_name, kernel_name,
+               workgroup_sizes, num_workgroups,
                samplers, args);
 
     scalar_args.reset();
@@ -865,12 +922,18 @@ void run_kernel(sample_info&                    info,
                 const char*                     module_name,
                 const char*                     entry_point,
                 const char*                     spvmap_name,
+                const char*                     kernel_name,
                 const std::tuple<int,int>&      workgroup_sizes,
                 const std::tuple<int,int>&      num_workgroups,
                 const std::vector<VkSampler>&   samplers,
                 const std::vector<VkBuffer>&    buffers,
                 const Args&                     scalars) {
-    run_kernel(info, module_name, entry_point, spvmap_name, workgroup_sizes, num_workgroups, samplers, buffers, &scalars, sizeof(scalars));
+    run_kernel(info,
+               module_name, entry_point,
+               spvmap_name, kernel_name,
+               workgroup_sizes, num_workgroups,
+               samplers, buffers,
+               &scalars, sizeof(scalars));
 }
 
 void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& samplers) {
@@ -915,12 +978,22 @@ void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sam
     std::vector<VkBuffer> data_buffers = { image_buffer.buf };
 
     memset_buffer(image_buffer, 0, buffer_size, 0);
-    run_kernel(info, "fills_glsl.spv", "main", "fills.spvmap", workgroup_sizes, num_workgroups, samplers, data_buffers, scalar_args);
+    run_kernel(info,
+               "fills_glsl.spv", "main",
+               "fills.spvmap", "FillWithColorKernel",
+               workgroup_sizes, num_workgroups,
+               samplers, data_buffers,
+               scalar_args);
     check_fill_results(image_buffer, scalar_args.inWidth, scalar_args.inHeight,
                        scalar_args.inPitch, scalar_args.inColor, "fills_glsl.spv/main");
 
     memset_buffer(image_buffer, 0, buffer_size, 0);
-    run_kernel(info, "fills.spv", "FillWithColorKernel", "fills.spvmap", workgroup_sizes, num_workgroups, samplers, data_buffers, scalar_args);
+    run_kernel(info,
+               "fills.spv", "FillWithColorKernel",
+               "fills.spvmap", NULL,
+               workgroup_sizes, num_workgroups,
+               samplers, data_buffers,
+               scalar_args);
     check_fill_results(image_buffer, scalar_args.inWidth, scalar_args.inHeight,
                        scalar_args.inPitch, scalar_args.inColor, "fills.spv/FillWithColorKernel");
 
