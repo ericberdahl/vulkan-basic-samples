@@ -67,7 +67,43 @@ struct alignas(16) float4 {
 
 struct kernel_params {
     struct arg {
-        arg() : type(VK_DESCRIPTOR_TYPE_MAX_ENUM), buffer(VK_NULL_HANDLE), sampler(VK_NULL_HANDLE), image(VK_NULL_HANDLE) {};
+        arg() : type(VK_DESCRIPTOR_TYPE_MAX_ENUM), buffer(VK_NULL_HANDLE), sampler(VK_NULL_HANDLE), image(VK_NULL_HANDLE) {}
+
+        static arg buffer_arg(VkBuffer buf) {
+            arg result;
+
+            result.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+            result.buffer = buf;
+
+            return result;
+        }
+
+        static arg sampler_arg(VkSampler samp) {
+            arg result;
+
+            result.type = VK_DESCRIPTOR_TYPE_SAMPLER;
+            result.sampler = samp;
+
+            return result;
+        }
+
+        static arg ro_image_arg(VkImageView im) {
+            arg result;
+
+            result.type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+            result.image = im;
+
+            return result;
+        }
+
+        static arg wo_image_arg(VkImageView im) {
+            arg result;
+
+            result.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+            result.image = im;
+
+            return result;
+        }
 
         VkDescriptorType    type;
         VkBuffer            buffer;
