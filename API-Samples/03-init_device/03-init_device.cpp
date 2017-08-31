@@ -55,7 +55,10 @@ struct buffer {
     void allocate(VkDevice dev, const VkPhysicalDeviceMemoryProperties& memory_properties, VkDeviceSize num_bytes);
     void reset();
 
-    VkDevice        device;
+    void memset(VkDeviceSize offset, VkDeviceSize size, int value);
+    void memcpy(VkDeviceSize offset, VkDeviceSize size, const void* source);
+
+        VkDevice        device;
     VkBuffer        buf;
     VkDeviceMemory  mem;
 };
@@ -204,10 +207,12 @@ void kernel_invocation::addPodArgument(const T& pod) {
     buffer scalar_args(mDevice, mMemoryProperties, sizeof(T));
     mPodBuffers.push_back(scalar_args);
 
-    memcpy_buffer(scalar_args, 0, sizeof(T), &pod);
+    scalar_args.memcpy(0, sizeof(T), &pod);
 
     addBufferArgument(scalar_args.buf);
 }
+
+/* ============================================================================================== */
 
 VKAPI_ATTR VkBool32 VKAPI_CALL dbgFunc(VkDebugReportFlagsEXT msgFlags, VkDebugReportObjectTypeEXT objType, uint64_t srcObject,
                                        size_t location, int32_t msgCode, const char *pLayerPrefix, const char *pMsg,
@@ -238,6 +243,8 @@ VKAPI_ATTR VkBool32 VKAPI_CALL dbgFunc(VkDebugReportFlagsEXT msgFlags, VkDebugRe
      */
     return VK_FALSE;
 }
+
+/* ============================================================================================== */
 
 std::string read_csv_field(std::istream& in) {
     std::string result;
@@ -408,6 +415,8 @@ std::vector<int> count_kernel_bindings(const spv_map& spvMap) {
     return result;
 }
 
+/* ============================================================================================== */
+
 void init_compute_queue_family_index(struct sample_info &info) {
     /* This routine simply finds a compute queue for a later vkCreateDevice.
      */
@@ -515,18 +524,6 @@ VkDescriptorSetLayout create_descriptor_set_layout(VkDevice device, int numBindi
 }
 
 
-void pipeline_layout::reset() {
-    std::for_each(descriptors.begin(), descriptors.end(), std::bind(vkDestroyDescriptorSetLayout, device, std::placeholders::_1, nullptr));
-    descriptors.clear();
-
-    if (VK_NULL_HANDLE != device && VK_NULL_HANDLE != pipeline) {
-        vkDestroyPipelineLayout(device, pipeline, NULL);
-    }
-
-    device = VK_NULL_HANDLE;
-    pipeline = VK_NULL_HANDLE;
-}
-
 uint32_t find_compatible_memory_index(const VkPhysicalDeviceMemoryProperties& memory_properties,
                                       uint32_t   typeBits,
                                       VkFlags    requirements_mask) {
@@ -546,56 +543,6 @@ uint32_t find_compatible_memory_index(const VkPhysicalDeviceMemoryProperties& me
     }
 
     return result;
-}
-
-void buffer::allocate(VkDevice                                  dev,
-                      const VkPhysicalDeviceMemoryProperties&   memory_properties,
-                      VkDeviceSize                              inNumBytes) {
-    reset();
-
-    device = dev;
-
-    // Allocate the buffer
-    VkBufferCreateInfo buf_info = {};
-    buf_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    buf_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-    buf_info.size = inNumBytes;
-    buf_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    VkResult U_ASSERT_ONLY res = vkCreateBuffer(device, &buf_info, NULL, &buf);
-    assert(res == VK_SUCCESS);
-
-    // Find out what we need in order to allocate memory for the buffer
-    VkMemoryRequirements mem_reqs = {};
-    vkGetBufferMemoryRequirements(device, buf, &mem_reqs);
-
-    // Allocate memory for the buffer
-    VkMemoryAllocateInfo alloc_info = {};
-    alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    alloc_info.allocationSize = mem_reqs.size;
-    alloc_info.memoryTypeIndex = find_compatible_memory_index(memory_properties,
-                                                              mem_reqs.memoryTypeBits,
-                                                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    assert(alloc_info.memoryTypeIndex < std::numeric_limits<uint32_t>::max() && "No mappable, coherent memory");
-    res = vkAllocateMemory(device, &alloc_info, NULL, &mem);
-    assert(res == VK_SUCCESS);
-
-    // Bind the memory to the buffer object
-    res = vkBindBufferMemory(device, buf, mem, 0);
-    assert(res == VK_SUCCESS);
-}
-
-void buffer::reset() {
-    if (buf != VK_NULL_HANDLE) {
-        vkDestroyBuffer(device, buf, NULL);
-        buf = VK_NULL_HANDLE;
-    }
-    if (mem != VK_NULL_HANDLE) {
-        vkFreeMemory(device, mem, NULL);
-        mem = VK_NULL_HANDLE;
-    }
-
-    device = VK_NULL_HANDLE;
 }
 
 pipeline_layout init_compute_pipeline_layout(VkDevice device, const spv_map& spvMap) {
@@ -663,22 +610,6 @@ VkSampler create_compatible_sampler(VkDevice device, int opencl_flags) {
     return result;
 }
 
-void memset_buffer(const buffer& buf, VkDeviceSize offset, VkDeviceSize size, int value) {
-    void* data = NULL;
-    VkResult U_ASSERT_ONLY res = vkMapMemory(buf.device, buf.mem, offset, size, 0, &data);
-    assert(res == VK_SUCCESS);
-    memset(data, 0, size);
-    vkUnmapMemory(buf.device, buf.mem);
-}
-
-void memcpy_buffer(const buffer& buf, VkDeviceSize offset, VkDeviceSize size, const void* source) {
-    void* data = NULL;
-    VkResult U_ASSERT_ONLY res = vkMapMemory(buf.device, buf.mem, offset, size, 0, &data);
-    assert(res == VK_SUCCESS);
-    memcpy(data, source, size);
-    vkUnmapMemory(buf.device, buf.mem);
-}
-
 VkCommandBuffer allocate_command_buffer(VkDevice device, VkCommandPool cmd_pool) {
     VkCommandBufferAllocateInfo allocInfo = {};
     allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
@@ -693,49 +624,89 @@ VkCommandBuffer allocate_command_buffer(VkDevice device, VkCommandPool cmd_pool)
     return result;
 }
 
-void check_fill_results(const buffer&    buf,
-                        int              width,
-                        int              height,
-                        int              pitch,
-                        const float4&    expected,
-                        const char*      label,
-                        bool             logIncorrect = false,
-                        bool             logCorrect = false) {
+/* ============================================================================================== */
+
+void buffer::memset(VkDeviceSize offset, VkDeviceSize size, int value) {
     void* data = NULL;
-
-    unsigned int num_correct_pixels = 0;
-    unsigned int num_incorrect_pixels = 0;
-    VkResult U_ASSERT_ONLY res = vkMapMemory(buf.device, buf.mem, 0, VK_WHOLE_SIZE, 0, &data);
+    VkResult U_ASSERT_ONLY res = vkMapMemory(device, mem, offset, size, 0, &data);
     assert(res == VK_SUCCESS);
-    {
-        const float4* pixels = static_cast<const float4*>(data);
-
-        const float4* row = pixels;
-        for (int r = 0; r < height; ++r, row += pitch) {
-            const float4* p = row;
-            for (int c = 0; c < width; ++c, ++p) {
-                const bool pixel_is_correct = (*p == expected);
-                if (pixel_is_correct) {
-                    ++num_correct_pixels;
-                    if (logCorrect) {
-                        LOGE("%s:  CORRECT pixels{row:%d, col%d} = {x=%f, y=%f, z=%f, w=%f}",
-                             label, r, c, p->x, p->y, p->z, p->w);
-                    }
-                }
-                else {
-                    ++num_incorrect_pixels;
-                    if (logIncorrect) {
-                        LOGE("%s: INCORRECT pixels{row:%d, col%d} = {x=%f, y=%f, z=%f, w=%f}",
-                             label, r, c, p->x, p->y, p->z, p->w);
-                    }
-                }
-            }
-        }
-    }
-    vkUnmapMemory(buf.device, buf.mem);
-
-    LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels, num_incorrect_pixels);
+    ::memset(data, 0, size);
+    vkUnmapMemory(device, mem);
 }
+
+void buffer::memcpy(VkDeviceSize offset, VkDeviceSize size, const void* source) {
+    void* data = NULL;
+    VkResult U_ASSERT_ONLY res = vkMapMemory(device, mem, offset, size, 0, &data);
+    assert(res == VK_SUCCESS);
+    ::memcpy(data, source, size);
+    vkUnmapMemory(device, mem);
+}
+
+void buffer::allocate(VkDevice                                  dev,
+                      const VkPhysicalDeviceMemoryProperties&   memory_properties,
+                      VkDeviceSize                              inNumBytes) {
+    reset();
+
+    device = dev;
+
+    // Allocate the buffer
+    VkBufferCreateInfo buf_info = {};
+    buf_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    buf_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    buf_info.size = inNumBytes;
+    buf_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VkResult U_ASSERT_ONLY res = vkCreateBuffer(device, &buf_info, NULL, &buf);
+    assert(res == VK_SUCCESS);
+
+    // Find out what we need in order to allocate memory for the buffer
+    VkMemoryRequirements mem_reqs = {};
+    vkGetBufferMemoryRequirements(device, buf, &mem_reqs);
+
+    // Allocate memory for the buffer
+    VkMemoryAllocateInfo alloc_info = {};
+    alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    alloc_info.allocationSize = mem_reqs.size;
+    alloc_info.memoryTypeIndex = find_compatible_memory_index(memory_properties,
+                                                              mem_reqs.memoryTypeBits,
+                                                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    assert(alloc_info.memoryTypeIndex < std::numeric_limits<uint32_t>::max() && "No mappable, coherent memory");
+    res = vkAllocateMemory(device, &alloc_info, NULL, &mem);
+    assert(res == VK_SUCCESS);
+
+    // Bind the memory to the buffer object
+    res = vkBindBufferMemory(device, buf, mem, 0);
+    assert(res == VK_SUCCESS);
+}
+
+void buffer::reset() {
+    if (buf != VK_NULL_HANDLE) {
+        vkDestroyBuffer(device, buf, NULL);
+        buf = VK_NULL_HANDLE;
+    }
+    if (mem != VK_NULL_HANDLE) {
+        vkFreeMemory(device, mem, NULL);
+        mem = VK_NULL_HANDLE;
+    }
+
+    device = VK_NULL_HANDLE;
+}
+
+/* ============================================================================================== */
+
+void pipeline_layout::reset() {
+    std::for_each(descriptors.begin(), descriptors.end(), std::bind(vkDestroyDescriptorSetLayout, device, std::placeholders::_1, nullptr));
+    descriptors.clear();
+
+    if (VK_NULL_HANDLE != device && VK_NULL_HANDLE != pipeline) {
+        vkDestroyPipelineLayout(device, pipeline, NULL);
+    }
+
+    device = VK_NULL_HANDLE;
+    pipeline = VK_NULL_HANDLE;
+}
+
+/* ============================================================================================== */
 
 kernel_invocation::kernel_invocation(VkDevice           device,
                                      VkCommandPool      cmdPool,
@@ -1058,6 +1029,52 @@ void kernel_invocation::run(VkQueue                     queue,
     vkDestroyPipeline(mDevice, pipeline, NULL);
 }
 
+/* ============================================================================================== */
+
+void check_fill_results(const buffer&    buf,
+                        int              width,
+                        int              height,
+                        int              pitch,
+                        const float4&    expected,
+                        const char*      label,
+                        bool             logIncorrect = false,
+                        bool             logCorrect = false) {
+    void* data = NULL;
+
+    unsigned int num_correct_pixels = 0;
+    unsigned int num_incorrect_pixels = 0;
+    VkResult U_ASSERT_ONLY res = vkMapMemory(buf.device, buf.mem, 0, VK_WHOLE_SIZE, 0, &data);
+    assert(res == VK_SUCCESS);
+    {
+        const float4* pixels = static_cast<const float4*>(data);
+
+        const float4* row = pixels;
+        for (int r = 0; r < height; ++r, row += pitch) {
+            const float4* p = row;
+            for (int c = 0; c < width; ++c, ++p) {
+                const bool pixel_is_correct = (*p == expected);
+                if (pixel_is_correct) {
+                    ++num_correct_pixels;
+                    if (logCorrect) {
+                        LOGE("%s:  CORRECT pixels{row:%d, col%d} = {x=%f, y=%f, z=%f, w=%f}",
+                             label, r, c, p->x, p->y, p->z, p->w);
+                    }
+                }
+                else {
+                    ++num_incorrect_pixels;
+                    if (logIncorrect) {
+                        LOGE("%s: INCORRECT pixels{row:%d, col%d} = {x=%f, y=%f, z=%f, w=%f}",
+                             label, r, c, p->x, p->y, p->z, p->w);
+                    }
+                }
+            }
+        }
+    }
+    vkUnmapMemory(buf.device, buf.mem);
+
+    LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels, num_incorrect_pixels);
+}
+
 void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& samplers) {
     const int buffer_height = 64;
     const int buffer_width = 64;
@@ -1097,7 +1114,7 @@ void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sam
     const auto num_workgroups = std::make_tuple((scalars.inWidth + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
                                                 (scalars.inHeight + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
 
-    memset_buffer(image_buffer, 0, buffer_size, 0);
+    image_buffer.memset(0, buffer_size, 0);
     {
         kernel_invocation glslInvocation(info.device,
                                          info.cmd_pool,
@@ -1113,7 +1130,7 @@ void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sam
     check_fill_results(image_buffer, scalars.inWidth, scalars.inHeight,
                        scalars.inPitch, scalars.inColor, "fills_glsl.spv/main");
 
-    memset_buffer(image_buffer, 0, buffer_size, 0);
+    image_buffer.memset(0, buffer_size, 0);
     {
         kernel_invocation oclInvocation(info.device,
                                         info.cmd_pool,
