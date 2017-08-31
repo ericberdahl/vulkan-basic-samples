@@ -67,59 +67,6 @@ struct alignas(16) float4 {
     float w;
 };
 
-struct kernel_params {
-    struct arg {
-        arg() : type(VK_DESCRIPTOR_TYPE_MAX_ENUM), buffer(VK_NULL_HANDLE), sampler(VK_NULL_HANDLE), image(VK_NULL_HANDLE) {}
-
-        static arg buffer_arg(VkBuffer buf) {
-            arg result;
-
-            result.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-            result.buffer = buf;
-
-            return result;
-        }
-
-        static arg sampler_arg(VkSampler samp) {
-            arg result;
-
-            result.type = VK_DESCRIPTOR_TYPE_SAMPLER;
-            result.sampler = samp;
-
-            return result;
-        }
-
-        static arg ro_image_arg(VkImageView im) {
-            arg result;
-
-            result.type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-            result.image = im;
-
-            return result;
-        }
-
-        static arg wo_image_arg(VkImageView im) {
-            arg result;
-
-            result.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-            result.image = im;
-
-            return result;
-        }
-
-        VkDescriptorType    type;
-        VkBuffer            buffer;
-        VkSampler           sampler;
-        VkImageView         image;
-    };
-
-    kernel_params() : literalSamplers(), arguments() {}
-    kernel_params(const kernel_params& other) : literalSamplers(other.literalSamplers), arguments(other.arguments) {}
-
-    std::vector<VkSampler>  literalSamplers;
-    std::vector<arg>        arguments;
-};
-
 struct spv_map {
     struct sampler {
         sampler() : opencl_flags(0), binding(-1) {};
@@ -178,6 +125,88 @@ bool operator==(const float4& l, const float4& r) {
 
 bool operator!=(const float4& l, const float4& r) {
     return !(l == r);
+}
+
+class kernel_invocation {
+public:
+    typedef std::tuple<int,int> WorkgroupDimensions;
+
+public:
+    kernel_invocation(VkDevice              device,
+                      VkCommandPool         cmdPool,
+                      VkDescriptorPool      descPool,
+                      const VkPhysicalDeviceMemoryProperties&   memoryProperties,
+                      const std::string&    moduleName,
+                      std::string           entryPoint,
+                      const std::string&    spvmapName,
+                      const std::string&    spvmapKernelName);
+
+    ~kernel_invocation();
+
+    template <typename Iterator>
+    void    addLiteralSamplers(Iterator first, Iterator last);
+
+    void    addBufferArgument(VkBuffer buf);
+    void    addReadOnlyImageArgument(VkImageView image);
+    void    addWriteOnlyImageArgument(VkImageView image);
+    void    addSamplerArgument(VkSampler samp);
+
+    template <typename T>
+    void    addPodArgument(const T& pod);
+
+    void    run(VkQueue                    queue,
+                const WorkgroupDimensions& workgroup_sizes,
+                const WorkgroupDimensions& num_workgroups);
+
+private:
+    void        fillCommandBuffer(VkPipeline                    pipeline,
+                                  const WorkgroupDimensions&    num_workgroups);
+    VkPipeline  createPipeline(const std::tuple<int,int>& work_group_sizes);
+    void        updateDescriptorSets();
+    void        submitCommand(VkQueue queue);
+
+private:
+    struct arg {
+        VkDescriptorType    type;
+        VkBuffer            buffer;
+        VkSampler           sampler;
+        VkImageView         image;
+    };
+
+private:
+    std::string                         mEntryPoint;
+    pipeline_layout                     mPipelineLayout;
+
+    VkDevice                            mDevice;
+    VkCommandPool                       mCmdPool;
+    VkDescriptorPool                    mDescriptorPool;
+    VkCommandBuffer                     mCommand;
+    VkShaderModule                      mShaderModule;
+    VkPhysicalDeviceMemoryProperties    mMemoryProperties;
+
+    VkDescriptorSet                     mLiteralSamplerDescSet;
+    VkDescriptorSet                     mArgumentsDescSet;
+
+    std::vector<VkSampler>              mLiteralSamplers;
+    std::vector<arg>                    mArguments;
+    std::vector<buffer>                 mPodBuffers;
+
+    std::vector<VkDescriptorSet>        mDescriptors;
+};
+
+template <typename Iterator>
+void kernel_invocation::addLiteralSamplers(Iterator first, Iterator last) {
+    mLiteralSamplers.insert(mLiteralSamplers.end(), first, last);
+}
+
+template <typename T>
+void kernel_invocation::addPodArgument(const T& pod) {
+    buffer scalar_args(mDevice, mMemoryProperties, sizeof(T));
+    mPodBuffers.push_back(scalar_args);
+
+    memcpy_buffer(scalar_args, 0, sizeof(T), &pod);
+
+    addBufferArgument(scalar_args.buf);
 }
 
 VKAPI_ATTR VkBool32 VKAPI_CALL dbgFunc(VkDebugReportFlagsEXT msgFlags, VkDebugReportObjectTypeEXT objType, uint64_t srcObject,
@@ -595,68 +624,6 @@ pipeline_layout init_compute_pipeline_layout(VkDevice device, const spv_map& spv
     return result;
 }
 
-void submit_command(VkCommandBuffer command, VkQueue queue) {
-    VkSubmitInfo submitInfo = {};
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &command;
-
-    VkResult U_ASSERT_ONLY res = vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE);
-    assert(res == VK_SUCCESS);
-
-}
-
-VkPipeline init_compute_pipeline(VkDevice                   device,
-                                 const pipeline_layout&     layout,
-                                 VkShaderModule             shaderModule,
-                                 const char*                entryName,
-                                 const std::tuple<int,int>& work_group_sizes) {
-    const unsigned int num_workgroup_sizes = 3;
-    const int32_t workGroupSizes[num_workgroup_sizes] = {
-            std::get<0>(work_group_sizes),
-            std::get<1>(work_group_sizes),
-            1
-    };
-    const VkSpecializationMapEntry specializationEntries[num_workgroup_sizes] = {
-            {
-                    0,                          // specialization constant 0 - workgroup size X
-                    0*sizeof(int32_t),          // offset - start of workGroupSizes array
-                    sizeof(workGroupSizes[0])   // sizeof the first element
-            },
-            {
-                    1,                          // specialization constant 1 - workgroup size Y
-                    1*sizeof(int32_t),            // offset - one element into the array
-                    sizeof(workGroupSizes[1])   // sizeof the second element
-            },
-            {
-                    2,                          // specialization constant 2 - workgroup size Z
-                    2*sizeof(int32_t),          // offset - two elements into the array
-                    sizeof(workGroupSizes[2])   // sizeof the second element
-            }
-    };
-    VkSpecializationInfo specializationInfo = {};
-    specializationInfo.mapEntryCount = num_workgroup_sizes;
-    specializationInfo.pMapEntries = specializationEntries;
-    specializationInfo.dataSize = sizeof(workGroupSizes);
-    specializationInfo.pData = workGroupSizes;
-
-    VkComputePipelineCreateInfo createInfo = {};
-    createInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    createInfo.layout = layout.pipeline;
-
-    createInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    createInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    createInfo.stage.module = shaderModule;
-    createInfo.stage.pName = entryName;
-    createInfo.stage.pSpecializationInfo = &specializationInfo;
-
-    VkPipeline result = VK_NULL_HANDLE;
-    VkResult U_ASSERT_ONLY res = vkCreateComputePipelines(device, VK_NULL_HANDLE, 1, &createInfo, NULL, &result);
-    assert(res == VK_SUCCESS);
-
-    return result;
-}
-
 VkSampler create_compatible_sampler(VkDevice device, int opencl_flags) {
     typedef std::pair<int,VkSamplerAddressMode> address_mode_map;
     const address_mode_map address_mode_translator[] = {
@@ -726,30 +693,6 @@ VkCommandBuffer allocate_command_buffer(VkDevice device, VkCommandPool cmd_pool)
     return result;
 }
 
-void fill_command_buffer(VkCommandBuffer    command,
-                         VkPipeline         pipeline,
-                         VkPipelineLayout   layout,
-                         const std::vector<VkDescriptorSet>& descriptors,
-                         const std::tuple<int,int>& num_workgroups) {
-    VkCommandBufferBeginInfo beginInfo = {};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    VkResult U_ASSERT_ONLY res = vkBeginCommandBuffer(command, &beginInfo);
-    assert(res == VK_SUCCESS);
-
-    vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
-
-    vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            layout,
-                            0,
-                            descriptors.size(), descriptors.data(),
-                            0, NULL);
-
-    vkCmdDispatch(command, std::get<0>(num_workgroups), std::get<1>(num_workgroups), 1);
-
-    res = vkEndCommandBuffer(command);
-    assert(res == VK_SUCCESS);
-}
-
 void check_fill_results(const buffer&    buf,
                         int              width,
                         int              height,
@@ -794,113 +737,34 @@ void check_fill_results(const buffer&    buf,
     LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels, num_incorrect_pixels);
 }
 
-class kernel_invocation {
-public:
-    kernel_invocation(VkDevice              device,
-                      VkCommandPool         cmdPool,
-                      VkDescriptorPool      descPool,
-                      const VkPhysicalDeviceMemoryProperties&   memoryProperties,
-                      std::string           moduleName,
-                      std::string           entryPoint,
-                      std::string           spvmapName,
-                      const std::string&    spvmapKernelName);
-
-    ~kernel_invocation();
-
-    template <typename Iterator>
-    void    addLiteralSamplers(Iterator first, Iterator last);
-
-    void    addBufferArgument(VkBuffer buf);
-    void    addReadOnlyImageArgument(VkImageView image);
-    void    addWriteOnlyImageArgument(VkImageView image);
-    void    addSamplerArgument(VkSampler samp);
-
-    template <typename T>
-    void    addPodArgument(const T& pod);
-
-    void    run(VkQueue                    queue,
-                const std::tuple<int,int>& workgroup_sizes,
-                const std::tuple<int,int>& num_workgroups);
-
-private:
-    void    updateDescriptorSets();
-
-private:
-    struct arg {
-        VkDescriptorType    type;
-        VkBuffer            buffer;
-        VkSampler           sampler;
-        VkImageView         image;
-    };
-
-private:
-    std::string                         mModuleName;
-    std::string                         mEntryPoint;
-    std::string                         mSpvmapName;
-    pipeline_layout                     mPipelineLayout;
-
-    int                                 mKernelDescSetIndex;
-
-    VkDevice                            mDevice;
-    VkCommandPool                       mCmdPool;
-    VkDescriptorPool                    mDescriptorPool;
-    VkCommandBuffer                     mCommand;
-    VkShaderModule                      mShaderModule;
-    VkPhysicalDeviceMemoryProperties    mMemoryProperties;
-
-    std::vector<VkSampler>              mLiteralSamplers;
-    std::vector<arg>                    mArguments;
-    std::vector<buffer>                 mPodBuffers;
-
-    std::vector<VkDescriptorSet>        mDescriptors;
-};
-
-template <typename Iterator>
-void kernel_invocation::addLiteralSamplers(Iterator first, Iterator last) {
-    mLiteralSamplers.insert(mLiteralSamplers.end(), first, last);
-}
-
-template <typename T>
-void kernel_invocation::addPodArgument(const T& pod) {
-    buffer scalar_args(mDevice, mMemoryProperties, sizeof(T));
-    mPodBuffers.push_back(scalar_args);
-
-    memcpy_buffer(scalar_args, 0, sizeof(T), &pod);
-
-    addBufferArgument(scalar_args.buf);
-}
-
 kernel_invocation::kernel_invocation(VkDevice           device,
                                      VkCommandPool      cmdPool,
                                      VkDescriptorPool   descPool,
                                      const VkPhysicalDeviceMemoryProperties&    memoryProperties,
-                                     std::string        moduleName,
+                                     const std::string& moduleName,
                                      std::string        entryPoint,
-                                     std::string        spvmapName,
+                                     const std::string& spvmapName,
                                      const std::string& spvmapKernelName) :
-        mModuleName(moduleName),
         mEntryPoint(entryPoint),
-        mSpvmapName(spvmapName),
         mPipelineLayout(),
-        mKernelDescSetIndex(-1),
         mDevice(device),
         mCmdPool(cmdPool),
         mDescriptorPool(descPool),
         mMemoryProperties(memoryProperties),
+        mLiteralSamplerDescSet(VK_NULL_HANDLE),
+        mArgumentsDescSet(VK_NULL_HANDLE),
         mCommand(VK_NULL_HANDLE),
         mShaderModule(VK_NULL_HANDLE),
         mLiteralSamplers(),
         mArguments(),
         mDescriptors() {
-    const spv_map shader_arg_map = create_spv_map(mSpvmapName.c_str());
+    const spv_map shader_arg_map = create_spv_map(spvmapName.c_str());
     const auto kernel_arg_map = std::find_if(shader_arg_map.kernels.begin(),
                                              shader_arg_map.kernels.end(),
                                              [&spvmapKernelName](const spv_map::kernel& k) {
                                                  return k.name == spvmapKernelName;
                                              });
     assert(kernel_arg_map != shader_arg_map.kernels.end());
-
-    mKernelDescSetIndex = kernel_arg_map->descriptor_set;
 
     // Create the pipeline layout from the spvmap description
     mPipelineLayout = init_compute_pipeline_layout(mDevice, shader_arg_map);
@@ -909,6 +773,8 @@ kernel_invocation::kernel_invocation(VkDevice           device,
     mShaderModule = create_shader(device, moduleName.c_str());
 
     mDescriptors = allocate_descriptor_set(mDevice, mDescriptorPool, mPipelineLayout);
+    mLiteralSamplerDescSet = mDescriptors[0];
+    mArgumentsDescSet = mDescriptors[kernel_arg_map->descriptor_set];
 }
 
 kernel_invocation::~kernel_invocation() {
@@ -1039,7 +905,7 @@ void kernel_invocation::updateDescriptorSets() {
 
     VkWriteDescriptorSet literalSamplerSet = {};
     literalSamplerSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    literalSamplerSet.dstSet = mDescriptors[0];
+    literalSamplerSet.dstSet = mLiteralSamplerDescSet;
     literalSamplerSet.dstBinding = 0;
     literalSamplerSet.descriptorCount = 1;
     literalSamplerSet.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
@@ -1059,7 +925,7 @@ void kernel_invocation::updateDescriptorSets() {
 
     VkWriteDescriptorSet argSet = {};
     argSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    argSet.dstSet = mDescriptors[mKernelDescSetIndex];
+    argSet.dstSet = mArgumentsDescSet;
     argSet.dstBinding = 0;
     argSet.descriptorCount = 1;
 
@@ -1099,83 +965,104 @@ void kernel_invocation::updateDescriptorSets() {
     vkUpdateDescriptorSets(mDevice, writeSets.size(), writeSets.data(), 0, nullptr);
 }
 
+void kernel_invocation::fillCommandBuffer(VkPipeline                    pipeline,
+                                          const WorkgroupDimensions&    num_workgroups) {
+    VkCommandBufferBeginInfo beginInfo = {};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+    VkResult U_ASSERT_ONLY res = vkBeginCommandBuffer(mCommand, &beginInfo);
+    assert(res == VK_SUCCESS);
+
+    vkCmdBindPipeline(mCommand, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
+
+    vkCmdBindDescriptorSets(mCommand, VK_PIPELINE_BIND_POINT_COMPUTE,
+                            mPipelineLayout.pipeline,
+                            0,
+                            mDescriptors.size(), mDescriptors.data(),
+                            0, NULL);
+
+    vkCmdDispatch(mCommand, std::get<0>(num_workgroups), std::get<1>(num_workgroups), 1);
+
+    res = vkEndCommandBuffer(mCommand);
+    assert(res == VK_SUCCESS);
+}
+
+void kernel_invocation::submitCommand(VkQueue queue) {
+    VkSubmitInfo submitInfo = {};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &mCommand;
+
+    VkResult U_ASSERT_ONLY res = vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE);
+    assert(res == VK_SUCCESS);
+
+}
+
+VkPipeline kernel_invocation::createPipeline(const WorkgroupDimensions& work_group_sizes) {
+    const unsigned int num_workgroup_sizes = 3;
+    const int32_t workGroupSizes[num_workgroup_sizes] = {
+            std::get<0>(work_group_sizes),
+            std::get<1>(work_group_sizes),
+            1
+    };
+    const VkSpecializationMapEntry specializationEntries[num_workgroup_sizes] = {
+            {
+                    0,                          // specialization constant 0 - workgroup size X
+                    0*sizeof(int32_t),          // offset - start of workGroupSizes array
+                    sizeof(workGroupSizes[0])   // sizeof the first element
+            },
+            {
+                    1,                          // specialization constant 1 - workgroup size Y
+                    1*sizeof(int32_t),            // offset - one element into the array
+                    sizeof(workGroupSizes[1])   // sizeof the second element
+            },
+            {
+                    2,                          // specialization constant 2 - workgroup size Z
+                    2*sizeof(int32_t),          // offset - two elements into the array
+                    sizeof(workGroupSizes[2])   // sizeof the second element
+            }
+    };
+    VkSpecializationInfo specializationInfo = {};
+    specializationInfo.mapEntryCount = num_workgroup_sizes;
+    specializationInfo.pMapEntries = specializationEntries;
+    specializationInfo.dataSize = sizeof(workGroupSizes);
+    specializationInfo.pData = workGroupSizes;
+
+    VkComputePipelineCreateInfo createInfo = {};
+    createInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+    createInfo.layout = mPipelineLayout.pipeline;
+
+    createInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    createInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+    createInfo.stage.module = mShaderModule;
+    createInfo.stage.pName = mEntryPoint.c_str();
+    createInfo.stage.pSpecializationInfo = &specializationInfo;
+
+    VkPipeline result = VK_NULL_HANDLE;
+    VkResult U_ASSERT_ONLY res = vkCreateComputePipelines(mDevice, VK_NULL_HANDLE, 1, &createInfo, NULL, &result);
+    assert(res == VK_SUCCESS);
+
+    return result;
+}
+
 void kernel_invocation::run(VkQueue                     queue,
-                            const std::tuple<int,int>&  workgroup_sizes,
-                            const std::tuple<int,int>&  num_workgroups) {
-    // create the pipeline
-    const VkPipeline pipeline = init_compute_pipeline(mDevice,
-                                                      mPipelineLayout,
-                                                      mShaderModule,
-                                                      mEntryPoint.c_str(),
-                                                      workgroup_sizes);
+                            const WorkgroupDimensions&  workgroup_sizes,
+                            const WorkgroupDimensions&  num_workgroups) {
+    const VkPipeline pipeline = createPipeline(workgroup_sizes);
 
     updateDescriptorSets();
-    fill_command_buffer(mCommand,
-                        pipeline,
-                        mPipelineLayout.pipeline,
-                        mDescriptors,
-                        num_workgroups);
-    submit_command(mCommand, queue);
+    fillCommandBuffer(pipeline, num_workgroups);
+    submitCommand(queue);
 
     vkQueueWaitIdle(queue);
 
     vkDestroyPipeline(mDevice, pipeline, NULL);
 }
 
-template <typename Args>
-void run_kernel(sample_info&                    info,
-                const char*                     module_name,
-                const char*                     entry_point,
-                const char*                     spvmap_name,
-                const char*                     kernel_name,
-                const std::tuple<int,int>&      workgroup_sizes,
-                const std::tuple<int,int>&      num_workgroups,
-                const kernel_params&            params,
-                const Args&                     scalars) {
-    kernel_invocation   invocation(info.device,
-                                   info.cmd_pool,
-                                   info.desc_pool,
-                                   info.memory_properties,
-                                   module_name,
-                                   entry_point,
-                                   spvmap_name,
-                                   kernel_name);
-
-    invocation.addLiteralSamplers(params.literalSamplers.begin(), params.literalSamplers.end());
-
-    for (auto a : params.arguments) {
-        switch (a.type) {
-            case VK_DESCRIPTOR_TYPE_SAMPLER:
-                invocation.addSamplerArgument(a.sampler);
-                break;
-
-            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-                invocation.addBufferArgument(a.buffer);
-                break;
-
-            case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
-                invocation.addWriteOnlyImageArgument(a.image);
-                break;
-
-            case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-                invocation.addReadOnlyImageArgument(a.image);
-                break;
-
-            default:
-                assert(0 && "unknown argument type");
-                break;
-        }
-    }
-    invocation.addPodArgument(scalars);
-
-    invocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
-}
-
 void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& samplers) {
     const int buffer_height = 64;
     const int buffer_width = 64;
 
-    struct fill_kernel_scalar_args {
+    struct scalar_args {
         int     inPitch;        // offset 0
         int     inDeviceFormat; // DevicePixelFormat offset 4
         int     inOffsetX;      // offset 8
@@ -1184,15 +1071,15 @@ void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sam
         int     inHeight;       // offset 20
         float4  inColor;        // offset 32
     };
-    static_assert(0 == offsetof(fill_kernel_scalar_args, inPitch), "inPitch offset incorrect");
-    static_assert(4 == offsetof(fill_kernel_scalar_args, inDeviceFormat), "inDeviceFormat offset incorrect");
-    static_assert(8 == offsetof(fill_kernel_scalar_args, inOffsetX), "inOffsetX offset incorrect");
-    static_assert(12 == offsetof(fill_kernel_scalar_args, inOffsetY), "inOffsetY offset incorrect");
-    static_assert(16 == offsetof(fill_kernel_scalar_args, inWidth), "inWidth offset incorrect");
-    static_assert(20 == offsetof(fill_kernel_scalar_args, inHeight), "inHeight offset incorrect");
-    static_assert(32 == offsetof(fill_kernel_scalar_args, inColor), "inColor offset incorrect");
+    static_assert(0 == offsetof(scalar_args, inPitch), "inPitch offset incorrect");
+    static_assert(4 == offsetof(scalar_args, inDeviceFormat), "inDeviceFormat offset incorrect");
+    static_assert(8 == offsetof(scalar_args, inOffsetX), "inOffsetX offset incorrect");
+    static_assert(12 == offsetof(scalar_args, inOffsetY), "inOffsetY offset incorrect");
+    static_assert(16 == offsetof(scalar_args, inWidth), "inWidth offset incorrect");
+    static_assert(20 == offsetof(scalar_args, inHeight), "inHeight offset incorrect");
+    static_assert(32 == offsetof(scalar_args, inColor), "inColor offset incorrect");
 
-    const fill_kernel_scalar_args scalar_args = {
+    const scalar_args scalars = {
             buffer_width,               // inPitch
             1,                          // inDeviceFormat - kDevicePixelFormat_BGRA_4444_32f
             0,                          // inOffsetX
@@ -1203,42 +1090,44 @@ void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sam
     };
 
     // allocate image buffer
-    const std::size_t buffer_size = scalar_args.inPitch * scalar_args.inHeight * sizeof(float4);
+    const std::size_t buffer_size = scalars.inPitch * scalars.inHeight * sizeof(float4);
     buffer image_buffer(info, buffer_size);
 
     const auto workgroup_sizes = std::make_tuple(32, 32);
-    const auto num_workgroups = std::make_tuple((scalar_args.inWidth + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
-                                                (scalar_args.inHeight + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
-
-    kernel_params params;
-    params.literalSamplers = samplers;
-    params.arguments.push_back(kernel_params::arg::buffer_arg(image_buffer.buf));
+    const auto num_workgroups = std::make_tuple((scalars.inWidth + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
+                                                (scalars.inHeight + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
 
     memset_buffer(image_buffer, 0, buffer_size, 0);
-    run_kernel(info,
-               "fills_glsl.spv", "main",
-               "fills.spvmap", "FillWithColorKernel",
-               workgroup_sizes, num_workgroups,
-               params,
-               scalar_args);
-    check_fill_results(image_buffer, scalar_args.inWidth, scalar_args.inHeight,
-                       scalar_args.inPitch, scalar_args.inColor, "fills_glsl.spv/main");
+    {
+        kernel_invocation glslInvocation(info.device,
+                                         info.cmd_pool,
+                                         info.desc_pool,
+                                         info.memory_properties,
+                                         "fills_glsl.spv", "main",
+                                         "fills.spvmap", "FillWithColorKernel");
+        glslInvocation.addLiteralSamplers(samplers.begin(), samplers.end());
+        glslInvocation.addBufferArgument(image_buffer.buf);
+        glslInvocation.addPodArgument(scalars);
+        glslInvocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
+    }
+    check_fill_results(image_buffer, scalars.inWidth, scalars.inHeight,
+                       scalars.inPitch, scalars.inColor, "fills_glsl.spv/main");
 
     memset_buffer(image_buffer, 0, buffer_size, 0);
-
-    kernel_invocation oclInvocation(info.device,
-                                     info.cmd_pool,
-                                     info.desc_pool,
-                                     info.memory_properties,
-                                     "fills.spv", "FillWithColorKernel",
-                                     "fills.spvmap", "FillWithColorKernel");
-    oclInvocation.addLiteralSamplers(samplers.begin(), samplers.end());
-    oclInvocation.addBufferArgument(image_buffer.buf);
-    oclInvocation.addPodArgument(scalar_args);
-    oclInvocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
-
-    check_fill_results(image_buffer, scalar_args.inWidth, scalar_args.inHeight,
-                       scalar_args.inPitch, scalar_args.inColor, "fills.spv/FillWithColorKernel");
+    {
+        kernel_invocation oclInvocation(info.device,
+                                        info.cmd_pool,
+                                        info.desc_pool,
+                                        info.memory_properties,
+                                        "fills.spv", "FillWithColorKernel",
+                                        "fills.spvmap", "FillWithColorKernel");
+        oclInvocation.addLiteralSamplers(samplers.begin(), samplers.end());
+        oclInvocation.addBufferArgument(image_buffer.buf);
+        oclInvocation.addPodArgument(scalars);
+        oclInvocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
+    }
+    check_fill_results(image_buffer, scalars.inWidth, scalars.inHeight,
+                       scalars.inPitch, scalars.inColor, "fills.spv/FillWithColorKernel");
 
     image_buffer.reset();
 }
