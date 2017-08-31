@@ -69,6 +69,15 @@ struct alignas(16) float4 {
     float z;
     float w;
 };
+static_assert(sizeof(float4) == 16, "bad size for float4");
+
+struct uchar4 {
+    unsigned char   x;
+    unsigned char   y;
+    unsigned char   z;
+    unsigned char   w;
+};
+static_assert(sizeof(uchar4) == 4, "bad size for uchar4");
 
 struct spv_map {
     struct sampler {
@@ -1149,6 +1158,81 @@ void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sam
     image_buffer.reset();
 }
 
+/* ============================================================================================== */
+
+void run_copytoimage_kernel(struct sample_info& info, const std::vector<VkSampler>& samplers) {
+    const int buffer_height = 64;
+    const int buffer_width = 64;
+
+    struct scalar_args {
+        int inSrcOffset;        // offset 0
+        int inSrcPitch;         // offset 4
+        int inSrcChannelOrder;  // offset 8 -- cl_channel_order
+        int inSrcChannelType;   // offset 12 -- cl_channel_type
+        int inSwapComponents;   // offset 16 -- bool
+        int inPremultiply;      // offset 20 -- bool
+        int inWidth;            // offset 24
+        int inHeight;           // offset 28
+    };
+    static_assert(0 == offsetof(scalar_args, inSrcOffset), "inSrcOffset offset incorrect");
+    static_assert(4 == offsetof(scalar_args, inSrcPitch), "inSrcPitch offset incorrect");
+    static_assert(8 == offsetof(scalar_args, inSrcChannelOrder), "inSrcChannelOrder offset incorrect");
+    static_assert(12 == offsetof(scalar_args, inSrcChannelType), "inSrcChannelType offset incorrect");
+    static_assert(16 == offsetof(scalar_args, inSwapComponents), "inSwapComponents offset incorrect");
+    static_assert(20 == offsetof(scalar_args, inPremultiply), "inPremultiply offset incorrect");
+    static_assert(24 == offsetof(scalar_args, inWidth), "inWidth offset incorrect");
+    static_assert(28 == offsetof(scalar_args, inHeight), "inHeight offset incorrect");
+
+    const scalar_args scalars = {
+            0,              // inSrcOffset
+            buffer_width,   // inSrcPitch
+            0x10B6,         // inSrcChannelOrder -- CL_BGRA
+            0x10D2,         // inSrcChannelType -- CL_UNORM_INT8
+            0,              // inSwapComponents
+            0,              // inPremultiply
+            buffer_width,   // inWidth
+            buffer_height   // inHeight
+    };
+
+    // allocate image buffer
+    const std::size_t buffer_size = scalars.inSrcPitch * scalars.inHeight * sizeof(uchar4);
+
+    buffer input_buffer(info, buffer_size);
+
+    {
+        VkImageCreateInfo imageInfo = {};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.extent.width = scalars.inWidth;
+        imageInfo.extent.height = scalars.inHeight;
+        imageInfo.extent.depth = 1;
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.format = VK_FORMAT_R8G8B8A8_UINT;
+        imageInfo.tiling = VK_IMAGE_TILING_LINEAR;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    }
+
+    const auto workgroup_sizes = std::make_tuple(32, 32);
+    const auto num_workgroups = std::make_tuple((scalars.inWidth + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
+                                                (scalars.inHeight + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
+
+    if (0) {    // STILL TESTING!!
+        kernel_invocation copyToImageInvocation(info.device,
+                                                info.cmd_pool,
+                                                info.desc_pool,
+                                                info.memory_properties,
+                                                "memory.spv", "CopyBufferToImageKernel",
+                                                "memory.spvmap", "CopyBufferToImageKernel");
+    }
+
+    input_buffer.reset();
+}
+
+/* ============================================================================================== */
+
 int sample_main(int argc, char *argv[]) {
     struct sample_info info = {};
     init_global_layer_properties(info);
@@ -1185,6 +1269,7 @@ int sample_main(int argc, char *argv[]) {
                    std::bind(create_compatible_sampler, info.device, std::placeholders::_1));
 
     run_fill_kernel(info, samplers);
+    run_copytoimage_kernel(info, samplers);
 
     //
     // Clean up
