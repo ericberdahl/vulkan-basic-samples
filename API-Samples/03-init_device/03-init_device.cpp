@@ -139,6 +139,14 @@ bool operator!=(const float4& l, const float4& r) {
     return !(l == r);
 }
 
+bool operator==(const uchar4& l, const uchar4& r) {
+    return (l.w == r.w && l.x == r.x && l.y == r.y && l.z == r.z);
+}
+
+bool operator!=(const uchar4& l, const uchar4& r) {
+    return !(l == r);
+}
+
 class kernel_invocation {
 public:
     typedef std::tuple<int,int> WorkgroupDimensions;
@@ -171,6 +179,8 @@ public:
                 const WorkgroupDimensions& num_workgroups);
 
 private:
+    pipeline_layout createPipelineLayout(const spv_map& spvMap);
+    VkDescriptorSetLayout   createDescriptorSetLayout(const std::vector<VkDescriptorType>& descriptorTypes);
     void        fillCommandBuffer(VkPipeline                    pipeline,
                                   const WorkgroupDimensions&    num_workgroups);
     VkPipeline  createPipeline(const std::tuple<int,int>& work_group_sizes);
@@ -293,6 +303,9 @@ spv_map::arg::kind_t spv_map::parse_argType(const std::string& argType) {
     else if (argType == "sampler") {
         result = arg::kind_sampler;
     }
+    else {
+        assert(0 && "unknown spvmap arg type");
+    }
 
     return result;
 }
@@ -378,6 +391,12 @@ spv_map spv_map::parse(std::istream& in) {
         }
     }
 
+    std::sort(result.kernels.begin(),
+              result.kernels.end(),
+              [](const spv_map::kernel& a, const spv_map::kernel& b) {
+                  return a.descriptor_set < b.descriptor_set;
+              });
+
     return result;
 }
 
@@ -394,34 +413,6 @@ spv_map create_spv_map(const char* spvmapFilename) {
     // parse the spvmap file contents
     std::istringstream in(buffer);
     return spv_map::parse(in);
-}
-
-std::vector<int> count_kernel_bindings(const spv_map& spvMap) {
-    std::vector<int> result;
-
-    for (auto &k : spvMap.kernels) {
-        auto max_arg = std::max_element(k.args.begin(), k.args.end(), [](const spv_map::arg& a, const spv_map::arg& b) {
-            return a.binding < b.binding;
-        });
-
-        if (result.size() <= k.descriptor_set) {
-            result.insert(result.end(), k.descriptor_set - result.size() + 1, 0);
-        }
-
-        result[k.descriptor_set] = max_arg->binding + 1;
-    }
-
-    if (0 < spvMap.samplers.size()) {
-        // There should be no kernel bindings for descriptor set 0 if there are samplers in the
-        // SPIR-V module.
-        assert(result[0] == 0);
-
-        // Remove the first element of the result (because it's a misnomer to say there are 0 kernel
-        // bindings for the first set
-        result.erase(result.begin());
-    }
-
-    return result;
 }
 
 /* ============================================================================================== */
@@ -442,14 +433,10 @@ void init_compute_queue_family_index(struct sample_info &info) {
 
 void my_init_descriptor_pool(struct sample_info &info) {
     const VkDescriptorPoolSize type_count[] = {
-            {
-                VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,  // type
-                4                                   // descriptorCount
-            },
-            {
-                VK_DESCRIPTOR_TYPE_SAMPLER, // type
-                4                           // descriptorCount
-            }
+            { VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,    16 },
+            { VK_DESCRIPTOR_TYPE_SAMPLER,           16 },
+            { VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE,     16 },
+            { VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,     16 }
     };
 
     VkDescriptorPoolCreateInfo createInfo = {};
@@ -507,32 +494,6 @@ VkShaderModule create_shader(VkDevice device, const char* spvFileName) {
     return shaderModule;
 }
 
-VkDescriptorSetLayout create_descriptor_set_layout(VkDevice device, int numBindings, VkDescriptorType descriptorType) {
-    std::vector<VkDescriptorSetLayoutBinding> bindingSet;
-
-    VkDescriptorSetLayoutBinding binding = {};
-    binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    binding.descriptorType = descriptorType;
-    binding.descriptorCount = 1;
-
-    for (int i = 0; i < numBindings; ++i) {
-        binding.binding = i;
-        bindingSet.push_back(binding);
-    }
-
-    VkDescriptorSetLayoutCreateInfo createInfo = {};
-    createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    createInfo.bindingCount = bindingSet.size();
-    createInfo.pBindings = createInfo.bindingCount ? bindingSet.data() : NULL;
-
-    VkDescriptorSetLayout result = VK_NULL_HANDLE;
-    VkResult U_ASSERT_ONLY res = vkCreateDescriptorSetLayout(device, &createInfo, NULL, &result);
-    assert(res == VK_SUCCESS);
-
-    return result;
-}
-
-
 uint32_t find_compatible_memory_index(const VkPhysicalDeviceMemoryProperties& memory_properties,
                                       uint32_t   typeBits,
                                       VkFlags    requirements_mask) {
@@ -550,32 +511,6 @@ uint32_t find_compatible_memory_index(const VkPhysicalDeviceMemoryProperties& me
         }
         typeBits >>= 1;
     }
-
-    return result;
-}
-
-pipeline_layout init_compute_pipeline_layout(VkDevice device, const spv_map& spvMap) {
-    pipeline_layout result;
-    result.device = device;
-
-    const int num_samplers = spvMap.samplers.size();
-    if (0 < num_samplers) {
-        result.descriptors.push_back(create_descriptor_set_layout(device, num_samplers,
-                                                                  VK_DESCRIPTOR_TYPE_SAMPLER));
-    }
-
-    for (auto &nb : count_kernel_bindings(spvMap)) {
-        result.descriptors.push_back(create_descriptor_set_layout(device, nb,
-                                                                  VK_DESCRIPTOR_TYPE_STORAGE_BUFFER));
-    };
-
-    VkPipelineLayoutCreateInfo createInfo = {};
-    createInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    createInfo.setLayoutCount = result.descriptors.size();
-    createInfo.pSetLayouts = createInfo.setLayoutCount ? result.descriptors.data() : NULL;
-
-    VkResult U_ASSERT_ONLY res = vkCreatePipelineLayout(device, &createInfo, NULL, &result.pipeline);
-    assert(res == VK_SUCCESS);
 
     return result;
 }
@@ -747,7 +682,7 @@ kernel_invocation::kernel_invocation(VkDevice           device,
     assert(kernel_arg_map != shader_arg_map.kernels.end());
 
     // Create the pipeline layout from the spvmap description
-    mPipelineLayout = init_compute_pipeline_layout(mDevice, shader_arg_map);
+    mPipelineLayout = createPipelineLayout(shader_arg_map);
 
     mCommand = allocate_command_buffer(mDevice, mCmdPool);
     mShaderModule = create_shader(device, moduleName.c_str());
@@ -815,6 +750,94 @@ void kernel_invocation::addWriteOnlyImageArgument(VkImageView im) {
     item.image = im;
 
     mArguments.push_back(item);
+}
+
+VkDescriptorSetLayout kernel_invocation::createDescriptorSetLayout(const std::vector<VkDescriptorType>& descriptorTypes) {
+    std::vector<VkDescriptorSetLayoutBinding> bindingSet;
+
+    VkDescriptorSetLayoutBinding binding = {};
+    binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+    binding.descriptorCount = 1;
+    binding.binding = 0;
+
+    for (auto type : descriptorTypes) {
+        binding.descriptorType = type;
+        bindingSet.push_back(binding);
+
+        ++binding.binding;
+    }
+
+    VkDescriptorSetLayoutCreateInfo createInfo = {};
+    createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    createInfo.bindingCount = bindingSet.size();
+    createInfo.pBindings = createInfo.bindingCount ? bindingSet.data() : NULL;
+
+    VkDescriptorSetLayout result = VK_NULL_HANDLE;
+    VkResult U_ASSERT_ONLY res = vkCreateDescriptorSetLayout(mDevice, &createInfo, NULL, &result);
+    assert(res == VK_SUCCESS);
+
+    return result;
+}
+
+pipeline_layout kernel_invocation::createPipelineLayout(const spv_map& spvMap) {
+    pipeline_layout result;
+    result.device = mDevice;
+
+    std::vector<VkDescriptorType> descriptorTypes;
+
+    const int num_samplers = spvMap.samplers.size();
+    if (0 < num_samplers) {
+        descriptorTypes.clear();
+        descriptorTypes.resize(num_samplers, VK_DESCRIPTOR_TYPE_SAMPLER);
+        result.descriptors.push_back(createDescriptorSetLayout(descriptorTypes));
+    }
+
+    for (auto &k : spvMap.kernels) {
+        descriptorTypes.clear();
+
+
+        for (auto &ka : k.args) {
+            // ignore any argument not in offset 0
+            if (0 != ka.offset) continue;
+
+            VkDescriptorType argType;
+
+            switch (ka.kind) {
+                case spv_map::arg::kind_pod:
+                case spv_map::arg::kind_buffer:
+                    argType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                    break;
+
+                case spv_map::arg::kind_ro_image:
+                    argType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+                    break;
+
+                case spv_map::arg::kind_wo_image:
+                    argType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                    break;
+
+                case spv_map::arg::kind_sampler:
+                    argType = VK_DESCRIPTOR_TYPE_SAMPLER;
+                    break;
+
+                default:
+                    assert(0 && "unkown argument type");
+            }
+
+            descriptorTypes.push_back(argType);
+        }
+        result.descriptors.push_back(createDescriptorSetLayout(descriptorTypes));
+    };
+
+    VkPipelineLayoutCreateInfo createInfo = {};
+    createInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    createInfo.setLayoutCount = result.descriptors.size();
+    createInfo.pSetLayouts = createInfo.setLayoutCount ? result.descriptors.data() : NULL;
+
+    VkResult U_ASSERT_ONLY res = vkCreatePipelineLayout(mDevice, &createInfo, NULL, &result.pipeline);
+    assert(res == VK_SUCCESS);
+
+    return result;
 }
 
 void kernel_invocation::updateDescriptorSets() {
@@ -1160,11 +1183,67 @@ void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sam
 
 /* ============================================================================================== */
 
-void run_copytoimage_kernel(struct sample_info& info, const std::vector<VkSampler>& samplers) {
+void check_copytofromimage_results(const buffer&    src,
+                                   const buffer&    dst,
+                                   int              width,
+                                   int              height,
+                                   int              pitch,
+                                   const char*      label,
+                                   bool             logIncorrect = false,
+                                   bool             logCorrect = false) {
+    unsigned int num_correct_pixels = 0;
+    unsigned int num_incorrect_pixels = 0;
+
+    void* src_data = NULL;
+    VkResult U_ASSERT_ONLY res = vkMapMemory(src.device, src.mem, 0, VK_WHOLE_SIZE, 0, &src_data);
+    assert(res == VK_SUCCESS);
+
+
+    void* dst_data = NULL;
+    res = vkMapMemory(dst.device, dst.mem, 0, VK_WHOLE_SIZE, 0, &dst_data);
+    assert(res == VK_SUCCESS);
+
+
+    {
+        const uchar4* src_pixels = static_cast<const uchar4*>(src_data);
+        const uchar4* dst_pixels = static_cast<const uchar4*>(dst_data);
+
+        const uchar4* src_row = src_pixels;
+        const uchar4* dst_row = dst_pixels;
+        for (int r = 0; r < height; ++r, src_row += pitch, dst_row += pitch) {
+            const uchar4* src_p = src_row;
+            const uchar4* dst_p = dst_row;
+            for (int c = 0; c < width; ++c, ++src_p, ++dst_p) {
+                const bool pixel_is_correct = (*dst_p == *src_p);
+                if (pixel_is_correct) {
+                    ++num_correct_pixels;
+                    if (logCorrect) {
+                        LOGE("%s:  CORRECT pixels{row:%d, col%d}",
+                             label, r, c);
+                    }
+                }
+                else {
+                    ++num_incorrect_pixels;
+                    if (logIncorrect) {
+                        LOGE("%s: INCORRECT pixels{row:%d, col%d}",
+                             label, r, c);
+                    }
+                }
+            }
+        }
+    }
+
+    vkUnmapMemory(dst.device, dst.mem);
+    vkUnmapMemory(src.device, src.mem);
+
+    LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels, num_incorrect_pixels);
+}
+
+void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkSampler>& samplers) {
     const int buffer_height = 64;
     const int buffer_width = 64;
 
-    struct scalar_args {
+    struct to_image_scalar_args {
         int inSrcOffset;        // offset 0
         int inSrcPitch;         // offset 4
         int inSrcChannelOrder;  // offset 8 -- cl_channel_order
@@ -1174,16 +1253,33 @@ void run_copytoimage_kernel(struct sample_info& info, const std::vector<VkSample
         int inWidth;            // offset 24
         int inHeight;           // offset 28
     };
-    static_assert(0 == offsetof(scalar_args, inSrcOffset), "inSrcOffset offset incorrect");
-    static_assert(4 == offsetof(scalar_args, inSrcPitch), "inSrcPitch offset incorrect");
-    static_assert(8 == offsetof(scalar_args, inSrcChannelOrder), "inSrcChannelOrder offset incorrect");
-    static_assert(12 == offsetof(scalar_args, inSrcChannelType), "inSrcChannelType offset incorrect");
-    static_assert(16 == offsetof(scalar_args, inSwapComponents), "inSwapComponents offset incorrect");
-    static_assert(20 == offsetof(scalar_args, inPremultiply), "inPremultiply offset incorrect");
-    static_assert(24 == offsetof(scalar_args, inWidth), "inWidth offset incorrect");
-    static_assert(28 == offsetof(scalar_args, inHeight), "inHeight offset incorrect");
+    static_assert(0 == offsetof(to_image_scalar_args, inSrcOffset), "inSrcOffset offset incorrect");
+    static_assert(4 == offsetof(to_image_scalar_args, inSrcPitch), "inSrcPitch offset incorrect");
+    static_assert(8 == offsetof(to_image_scalar_args, inSrcChannelOrder), "inSrcChannelOrder offset incorrect");
+    static_assert(12 == offsetof(to_image_scalar_args, inSrcChannelType), "inSrcChannelType offset incorrect");
+    static_assert(16 == offsetof(to_image_scalar_args, inSwapComponents), "inSwapComponents offset incorrect");
+    static_assert(20 == offsetof(to_image_scalar_args, inPremultiply), "inPremultiply offset incorrect");
+    static_assert(24 == offsetof(to_image_scalar_args, inWidth), "inWidth offset incorrect");
+    static_assert(28 == offsetof(to_image_scalar_args, inHeight), "inHeight offset incorrect");
 
-    const scalar_args scalars = {
+    struct from_image_scalar_args {
+        int inDestOffset;       // offset 0
+        int inDestPitch;        // offset 4
+        int inDestChannelOrder; // offset 8 -- cl_channel_order
+        int inDestChannelType;  // offset 12 -- cl_channel_type
+        int inSwapComponents;   // offset 16 -- bool
+        int inWidth;            // offset 20
+        int inHeight;           // offset 24
+    };
+    static_assert(0 == offsetof(from_image_scalar_args, inDestOffset), "inDestOffset offset incorrect");
+    static_assert(4 == offsetof(from_image_scalar_args, inDestPitch), "inDestPitch offset incorrect");
+    static_assert(8 == offsetof(from_image_scalar_args, inDestChannelOrder), "inDestChannelOrder offset incorrect");
+    static_assert(12 == offsetof(from_image_scalar_args, inDestChannelType), "inDestChannelType offset incorrect");
+    static_assert(16 == offsetof(from_image_scalar_args, inSwapComponents), "inSwapComponents offset incorrect");
+    static_assert(20 == offsetof(from_image_scalar_args, inWidth), "inWidth offset incorrect");
+    static_assert(24 == offsetof(from_image_scalar_args, inHeight), "inHeight offset incorrect");
+
+    const to_image_scalar_args to_image_scalars = {
             0,              // inSrcOffset
             buffer_width,   // inSrcPitch
             0x10B6,         // inSrcChannelOrder -- CL_BGRA
@@ -1194,41 +1290,105 @@ void run_copytoimage_kernel(struct sample_info& info, const std::vector<VkSample
             buffer_height   // inHeight
     };
 
-    // allocate image buffer
-    const std::size_t buffer_size = scalars.inSrcPitch * scalars.inHeight * sizeof(uchar4);
+    const from_image_scalar_args from_image_scalars = {
+            0,              // inDestOffset
+            buffer_width,   // inDestPitch
+            0x10B6,         // inDestChannelOrder -- CL_BGRA
+            0x10D2,         // inDestChannelType -- CL_UNORM_INT8
+            0,              // inSwapComponents
+            buffer_width,   // inWidth
+            buffer_height   // inHeight
+    };
 
-    buffer input_buffer(info, buffer_size);
+    const std::size_t buffer_size = buffer_width * buffer_height * sizeof(uchar4);
 
+    // allocate source and destination buffers
+    buffer src_buffer(info, buffer_size);
+    buffer dst_buffer(info, buffer_size);
+
+    // initialize source and destingation buffers
+    src_buffer.memset(0, buffer_size, 0xaa);
+    dst_buffer.memset(0, buffer_size, 0);
+
+    // Create the destination image
+    VkImage image = VK_NULL_HANDLE;
     {
         VkImageCreateInfo imageInfo = {};
         imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
         imageInfo.imageType = VK_IMAGE_TYPE_2D;
-        imageInfo.extent.width = scalars.inWidth;
-        imageInfo.extent.height = scalars.inHeight;
+        imageInfo.format = VK_FORMAT_R8G8B8A8_UINT;
+        imageInfo.extent.width = buffer_width;
+        imageInfo.extent.height = buffer_height;
         imageInfo.extent.depth = 1;
         imageInfo.mipLevels = 1;
         imageInfo.arrayLayers = 1;
-        imageInfo.format = VK_FORMAT_R8G8B8A8_UINT;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
         imageInfo.tiling = VK_IMAGE_TILING_LINEAR;
-        imageInfo.initialLayout = VK_IMAGE_LAYOUT_UNDEFINED;
         imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
         imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+        VkResult U_ASSERT_ONLY res = vkCreateImage(info.device, &imageInfo, nullptr, &image);
+        assert(res == VK_SUCCESS);
+    }
+
+    // Create the destination image view
+    VkImageView imageView = VK_NULL_HANDLE;
+    {
+        VkImageViewCreateInfo viewInfo = {};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = image;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = VK_FORMAT_R8G8B8A8_UINT;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+
+        VkResult U_ASSERT_ONLY res = vkCreateImageView(info.device, &viewInfo, nullptr, &imageView);
+        assert(res == VK_SUCCESS);
     }
 
     const auto workgroup_sizes = std::make_tuple(32, 32);
-    const auto num_workgroups = std::make_tuple((scalars.inWidth + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
-                                                (scalars.inHeight + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
-
-    if (0) {    // STILL TESTING!!
+    const auto num_workgroups = std::make_tuple((buffer_width + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
+                                                (buffer_height + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
+    {
         kernel_invocation copyToImageInvocation(info.device,
                                                 info.cmd_pool,
                                                 info.desc_pool,
                                                 info.memory_properties,
                                                 "memory.spv", "CopyBufferToImageKernel",
                                                 "memory.spvmap", "CopyBufferToImageKernel");
+
+        copyToImageInvocation.addLiteralSamplers(samplers.begin(), samplers.end());
+        copyToImageInvocation.addBufferArgument(src_buffer.buf);
+        copyToImageInvocation.addWriteOnlyImageArgument(imageView);
+        copyToImageInvocation.addPodArgument(to_image_scalars);
+
+        copyToImageInvocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
+    }
+    {
+        kernel_invocation copyFromImageInvocation(info.device,
+                                                  info.cmd_pool,
+                                                  info.desc_pool,
+                                                  info.memory_properties,
+                                                  "memory.spv", "CopyImageToBufferKernel",
+                                                  "memory.spvmap", "CopyImageToBufferKernel");
+
+        copyFromImageInvocation.addLiteralSamplers(samplers.begin(), samplers.end());
+        copyFromImageInvocation.addReadOnlyImageArgument(imageView);
+        copyFromImageInvocation.addBufferArgument(dst_buffer.buf);
+        copyFromImageInvocation.addPodArgument(from_image_scalars);
+
+        copyFromImageInvocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
     }
 
-    input_buffer.reset();
+    check_copytofromimage_results(src_buffer, dst_buffer,
+                                  buffer_width, buffer_height, buffer_height,
+                                  "memory.spv/copybuffertofromimage");
+
+    vkDestroyImageView(info.device, imageView, nullptr);
+    vkDestroyImage(info.device, image, nullptr);
+    dst_buffer.reset();
+    src_buffer.reset();
 }
 
 /* ============================================================================================== */
@@ -1269,7 +1429,7 @@ int sample_main(int argc, char *argv[]) {
                    std::bind(create_compatible_sampler, info.device, std::placeholders::_1));
 
     run_fill_kernel(info, samplers);
-    run_copytoimage_kernel(info, samplers);
+    run_copytofromimage_kernels(info, samplers);
 
     //
     // Clean up
