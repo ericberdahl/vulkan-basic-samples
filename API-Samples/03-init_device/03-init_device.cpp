@@ -52,13 +52,13 @@ struct buffer {
         allocate(dev, memoryProperties, num_bytes);
     };
 
-    void allocate(VkDevice dev, const VkPhysicalDeviceMemoryProperties& memory_properties, VkDeviceSize num_bytes);
-    void reset();
+    void    allocate(VkDevice dev, const VkPhysicalDeviceMemoryProperties& memory_properties, VkDeviceSize num_bytes);
+    void    reset();
 
-    void memset(VkDeviceSize offset, VkDeviceSize size, int value);
-    void memcpy(VkDeviceSize offset, VkDeviceSize size, const void* source);
+    void*   map() const;
+    void    unmap() const;
 
-        VkDevice        device;
+    VkDevice        device;
     VkBuffer        buf;
     VkDeviceMemory  mem;
 };
@@ -226,7 +226,8 @@ void kernel_invocation::addPodArgument(const T& pod) {
     buffer scalar_args(mDevice, mMemoryProperties, sizeof(T));
     mPodBuffers.push_back(scalar_args);
 
-    scalar_args.memcpy(0, sizeof(T), &pod);
+    memcpy(scalar_args.map(), &pod, sizeof(T));
+    scalar_args.unmap();
 
     addBufferArgument(scalar_args.buf);
 }
@@ -570,19 +571,16 @@ VkCommandBuffer allocate_command_buffer(VkDevice device, VkCommandPool cmd_pool)
 
 /* ============================================================================================== */
 
-void buffer::memset(VkDeviceSize offset, VkDeviceSize size, int value) {
-    void* data = NULL;
-    VkResult U_ASSERT_ONLY res = vkMapMemory(device, mem, offset, size, 0, &data);
+void* buffer::map() const {
+    void* result = NULL;
+
+    VkResult U_ASSERT_ONLY res = vkMapMemory(device, mem, 0, VK_WHOLE_SIZE, 0, &result);
     assert(res == VK_SUCCESS);
-    ::memset(data, 0, size);
-    vkUnmapMemory(device, mem);
+
+    return result;
 }
 
-void buffer::memcpy(VkDeviceSize offset, VkDeviceSize size, const void* source) {
-    void* data = NULL;
-    VkResult U_ASSERT_ONLY res = vkMapMemory(device, mem, offset, size, 0, &data);
-    assert(res == VK_SUCCESS);
-    ::memcpy(data, source, size);
+void buffer::unmap() const {
     vkUnmapMemory(device, mem);
 }
 
@@ -1071,12 +1069,10 @@ void check_fill_results(const buffer&    buf,
                         const char*      label,
                         bool             logIncorrect = false,
                         bool             logCorrect = false) {
-    void* data = NULL;
 
     unsigned int num_correct_pixels = 0;
     unsigned int num_incorrect_pixels = 0;
-    VkResult U_ASSERT_ONLY res = vkMapMemory(buf.device, buf.mem, 0, VK_WHOLE_SIZE, 0, &data);
-    assert(res == VK_SUCCESS);
+    void* data = buf.map();
     {
         const float4* pixels = static_cast<const float4*>(data);
 
@@ -1102,7 +1098,7 @@ void check_fill_results(const buffer&    buf,
             }
         }
     }
-    vkUnmapMemory(buf.device, buf.mem);
+    buf.unmap();
 
     LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels, num_incorrect_pixels);
 }
@@ -1146,7 +1142,8 @@ void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sam
     const auto num_workgroups = std::make_tuple((scalars.inWidth + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
                                                 (scalars.inHeight + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
 
-    image_buffer.memset(0, buffer_size, 0);
+    memset(image_buffer.map(), 0, buffer_size);
+    image_buffer.unmap();
     {
         kernel_invocation glslInvocation(info.device,
                                          info.cmd_pool,
@@ -1162,7 +1159,8 @@ void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sam
     check_fill_results(image_buffer, scalars.inWidth, scalars.inHeight,
                        scalars.inPitch, scalars.inColor, "fills_glsl.spv/main");
 
-    image_buffer.memset(0, buffer_size, 0);
+    memset(image_buffer.map(), 0, buffer_size);
+    image_buffer.unmap();
     {
         kernel_invocation oclInvocation(info.device,
                                         info.cmd_pool,
@@ -1194,15 +1192,8 @@ void check_copytofromimage_results(const buffer&    src,
     unsigned int num_correct_pixels = 0;
     unsigned int num_incorrect_pixels = 0;
 
-    void* src_data = NULL;
-    VkResult U_ASSERT_ONLY res = vkMapMemory(src.device, src.mem, 0, VK_WHOLE_SIZE, 0, &src_data);
-    assert(res == VK_SUCCESS);
-
-
-    void* dst_data = NULL;
-    res = vkMapMemory(dst.device, dst.mem, 0, VK_WHOLE_SIZE, 0, &dst_data);
-    assert(res == VK_SUCCESS);
-
+    void* src_data = src.map();
+    void* dst_data = dst.map();
 
     {
         const uchar4* src_pixels = static_cast<const uchar4*>(src_data);
@@ -1233,8 +1224,8 @@ void check_copytofromimage_results(const buffer&    src,
         }
     }
 
-    vkUnmapMemory(dst.device, dst.mem);
-    vkUnmapMemory(src.device, src.mem);
+    dst.unmap();
+    src.unmap();
 
     LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels, num_incorrect_pixels);
 }
@@ -1307,9 +1298,16 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
     buffer dst_buffer(info, buffer_size);
 
     // initialize source and destingation buffers
-    src_buffer.memset(0, buffer_size, 0xaa);
-    dst_buffer.memset(0, buffer_size, 0);
+    memset(src_buffer.map(), 0xaa, buffer_size);
+    src_buffer.unmap();
 
+    memset(dst_buffer.map(), 0, buffer_size);
+    dst_buffer.unmap();
+#if 0
+    check_copytofromimage_results(src_buffer, dst_buffer,
+                                  buffer_width, buffer_height, buffer_height,
+                                  "should fail utterly");
+#endif
     // Create the destination image
     VkImage image = VK_NULL_HANDLE;
     {
