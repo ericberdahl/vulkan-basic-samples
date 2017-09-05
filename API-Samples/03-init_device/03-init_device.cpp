@@ -34,6 +34,58 @@ create and destroy a Vulkan physical device
 #include <string>
 #include <util_init.hpp>
 
+/* cl_channel_order */
+#define CL_R                                        0x10B0
+#define CL_A                                        0x10B1
+#define CL_RG                                       0x10B2
+#define CL_RA                                       0x10B3
+#define CL_RGB                                      0x10B4
+#define CL_RGBA                                     0x10B5
+#define CL_BGRA                                     0x10B6
+#define CL_ARGB                                     0x10B7
+#define CL_INTENSITY                                0x10B8
+#define CL_LUMINANCE                                0x10B9
+#define CL_Rx                                       0x10BA
+#define CL_RGx                                      0x10BB
+#define CL_RGBx                                     0x10BC
+#define CL_DEPTH                                    0x10BD
+#define CL_DEPTH_STENCIL                            0x10BE
+
+/* cl_channel_type */
+#define CL_SNORM_INT8                               0x10D0
+#define CL_SNORM_INT16                              0x10D1
+#define CL_UNORM_INT8                               0x10D2
+#define CL_UNORM_INT16                              0x10D3
+#define CL_UNORM_SHORT_565                          0x10D4
+#define CL_UNORM_SHORT_555                          0x10D5
+#define CL_UNORM_INT_101010                         0x10D6
+#define CL_SIGNED_INT8                              0x10D7
+#define CL_SIGNED_INT16                             0x10D8
+#define CL_SIGNED_INT32                             0x10D9
+#define CL_UNSIGNED_INT8                            0x10DA
+#define CL_UNSIGNED_INT16                           0x10DB
+#define CL_UNSIGNED_INT32                           0x10DC
+#define CL_HALF_FLOAT                               0x10DD
+#define CL_FLOAT                                    0x10DE
+#define CL_UNORM_INT24                              0x10DF
+
+enum {
+    CLK_ADDRESS_NONE = 0x0000,
+    CLK_ADDRESS_CLAMP_TO_EDGE = 0x0002,
+    CLK_ADDRESS_CLAMP = 0x0004,
+    CLK_ADDRESS_REPEAT = 0x0006,
+    CLK_ADDRESS_MIRRORED_REPEAT = 0x0008,
+    CLK_ADDRESS_MASK = 0x000E,
+
+    CLK_NORMALIZED_COORDS_FALSE = 0x0000,
+    CLK_NORMALIZED_COORDS_TRUE = 0x0001,
+    CLK_NORMALIZED_COORDS_MASK = 0x0001,
+
+    CLK_FILTER_NEAREST = 0x0010,
+    CLK_FILTER_LINEAR = 0x0020,
+    CLK_FILTER_MASK = 0x0030
+};
+
 struct pipeline_layout {
     pipeline_layout() : device(VK_NULL_HANDLE), descriptors(), pipeline(VK_NULL_HANDLE) {};
 
@@ -166,23 +218,6 @@ struct spv_map {
 
     std::vector<sampler>    samplers;
     std::vector<kernel>     kernels;
-};
-
-enum {
-    CLK_ADDRESS_NONE = 0x0000,
-    CLK_ADDRESS_CLAMP_TO_EDGE = 0x0002,
-    CLK_ADDRESS_CLAMP = 0x0004,
-    CLK_ADDRESS_REPEAT = 0x0006,
-    CLK_ADDRESS_MIRRORED_REPEAT = 0x0008,
-    CLK_ADDRESS_MASK = 0x000E,
-
-    CLK_NORMALIZED_COORDS_FALSE = 0x0000,
-    CLK_NORMALIZED_COORDS_TRUE = 0x0001,
-    CLK_NORMALIZED_COORDS_MASK = 0x0001,
-
-    CLK_FILTER_NEAREST = 0x0010,
-    CLK_FILTER_LINEAR = 0x0020,
-    CLK_FILTER_MASK = 0x0030
 };
 
 bool operator==(const float4& l, const float4& r) {
@@ -1336,18 +1371,15 @@ void check_copytofromimage_results(const device_memory& src,
 
     memory_map src_map(src);
     memory_map dst_map(dst);
-    void* src_data = src_map.data;
-    void* dst_data = dst_map.data;
+    auto src_pixels = static_cast<const float4*>(src_map.data);
+    auto dst_pixels = static_cast<const float4*>(dst_map.data);
 
     {
-        const uchar4* src_pixels = static_cast<const uchar4*>(src_data);
-        const uchar4* dst_pixels = static_cast<const uchar4*>(dst_data);
-
-        const uchar4* src_row = src_pixels;
-        const uchar4* dst_row = dst_pixels;
+        auto src_row = src_pixels;
+        auto dst_row = dst_pixels;
         for (int r = 0; r < height; ++r, src_row += pitch, dst_row += pitch) {
-            const uchar4* src_p = src_row;
-            const uchar4* dst_p = dst_row;
+            auto src_p = src_row;
+            auto dst_p = dst_row;
             for (int c = 0; c < width; ++c, ++src_p, ++dst_p) {
                 const bool pixel_is_correct = (*dst_p == *src_p);
                 if (pixel_is_correct) {
@@ -1359,7 +1391,7 @@ void check_copytofromimage_results(const device_memory& src,
                 else {
                     ++num_incorrect_pixels;
                     if (logIncorrect) {
-                        LOGE("%s: INCORRECT pixels{row:%d, col%d} expected{x=%x, y=%x, z=%x, w=%x} observed{x=%x, y=%x, z=%x, w=%x}",
+                        LOGE("%s: INCORRECT pixels{row:%d, col%d} expected{x=%f, y=%f, z=%f, w=%f} observed{x=%f, y=%f, z=%f, w=%f}",
                              label, r, c,
                              src_p->x, src_p->y, src_p->z, src_p->w,
                              dst_p->x, dst_p->y, dst_p->z, dst_p->w);
@@ -1415,8 +1447,8 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
     const to_image_scalar_args to_image_scalars = {
             0,              // inSrcOffset
             buffer_width,   // inSrcPitch
-            0x10B6,         // inSrcChannelOrder -- CL_BGRA
-            0x10D2,         // inSrcChannelType -- CL_UNORM_INT8
+            CL_RGBA,        // inSrcChannelOrder
+            CL_FLOAT,       // inSrcChannelType
             0,              // inSwapComponents
             0,              // inPremultiply
             buffer_width,   // inWidth
@@ -1426,38 +1458,38 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
     const from_image_scalar_args from_image_scalars = {
             0,              // inDestOffset
             buffer_width,   // inDestPitch
-            0x10B6,         // inDestChannelOrder -- CL_BGRA
-            0x10D2,         // inDestChannelType -- CL_UNORM_INT8
+            CL_RGBA,        // inDestChannelOrder
+            CL_FLOAT,       // inDestChannelType
             0,              // inSwapComponents
             buffer_width,   // inWidth
             buffer_height   // inHeight
     };
 
-    const std::size_t buffer_size = buffer_width * buffer_height * sizeof(uchar4);
+    const std::size_t buffer_size = buffer_width * buffer_height * sizeof(float4);
 
-    // allocate source and destination buffers
-    buffer src_buffer(info, buffer_size);
-    buffer dst_buffer(info, buffer_size);
+    // allocate buffers and images
+    buffer  src_buffer(info, buffer_size);
+    buffer  dst_buffer(info, buffer_size);
+    image   dstImage(info, buffer_width, buffer_height, VK_FORMAT_R32G32B32A32_SFLOAT /* VK_FORMAT_R8G8B8A8_UINT */);
 
-    // Ok, need to allocate memory for the image and bind it. Duh.
-
-    // initialize source and destingation buffers
+    // initialize source and destination buffers
     {
+        const float4 src_value = { 0.2f, 0.4f, 0.6f, 0.8f };
         memory_map src_map(src_buffer);
-        memset(src_map.data, 0xaa, buffer_size);
+        float4* src_data = static_cast<float4*>(src_map.data);
+        std::fill(src_data, src_data + (buffer_width * buffer_height), src_value);
     }
 
     {
+        const float4 dst_value = { 0.1f, 0.3f, 0.5f, 0.7f };
         memory_map dst_map(dst_buffer);
-        memset(dst_map.data, 0x55, buffer_size);
+        float4* dst_data = static_cast<float4*>(dst_map.data);
+        std::fill(dst_data, dst_data + (buffer_width * buffer_height), dst_value);
     }
-#if 1
+
     check_copytofromimage_results(src_buffer.mem, dst_buffer.mem,
                                   buffer_width, buffer_height, buffer_height,
                                   "should fail utterly");
-#endif
-    // Create the destination image
-    image   dstImage(info, buffer_width, buffer_height, VK_FORMAT_R8G8B8A8_UINT);
 
     const auto workgroup_sizes = std::make_tuple(32, 32);
     const auto num_workgroups = std::make_tuple((buffer_width + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
