@@ -44,8 +44,26 @@ struct pipeline_layout {
     VkPipelineLayout                    pipeline;
 };
 
+struct device_memory {
+    device_memory() : device(VK_NULL_HANDLE), mem(VK_NULL_HANDLE) {}
+    device_memory(VkDevice                                  dev,
+                  const VkMemoryRequirements&               mem_reqs,
+                  const VkPhysicalDeviceMemoryProperties    memoryProperties)
+            : device_memory() {
+        allocate(dev, mem_reqs, memoryProperties);
+    };
+
+    void    allocate(VkDevice                                   dev,
+                     const VkMemoryRequirements&                mem_reqs,
+                     const VkPhysicalDeviceMemoryProperties&    memory_properties);
+    void    reset();
+
+    VkDevice        device;
+    VkDeviceMemory  mem;
+};
+
 struct buffer {
-    buffer() : device(VK_NULL_HANDLE), buf(VK_NULL_HANDLE), mem(VK_NULL_HANDLE) {}
+    buffer() : mem(), buf(VK_NULL_HANDLE) {}
     buffer(sample_info &info, VkDeviceSize num_bytes) : buffer(info.device, info.memory_properties, num_bytes) {}
 
     buffer(VkDevice dev, const VkPhysicalDeviceMemoryProperties memoryProperties, VkDeviceSize num_bytes) : buffer() {
@@ -55,13 +73,49 @@ struct buffer {
     void    allocate(VkDevice dev, const VkPhysicalDeviceMemoryProperties& memory_properties, VkDeviceSize num_bytes);
     void    reset();
 
-    void*   map() const;
-    void    unmap() const;
-
-    VkDevice        device;
+    device_memory   mem;
     VkBuffer        buf;
-    VkDeviceMemory  mem;
 };
+
+struct image {
+    image() : mem(), im(VK_NULL_HANDLE), view(VK_NULL_HANDLE) {}
+    image(sample_info&  info,
+          uint32_t      width,
+          uint32_t      height,
+          VkFormat      format) : image(info.device, info.memory_properties, width, height, format) {}
+
+    image(VkDevice dev,
+          const VkPhysicalDeviceMemoryProperties memoryProperties,
+          uint32_t                                   width,
+          uint32_t                                   height,
+          VkFormat                                   format) : image() {
+        allocate(dev, memoryProperties, width, height, format);
+    };
+
+    void    allocate(VkDevice                                   dev,
+                     const VkPhysicalDeviceMemoryProperties&    memory_properties,
+                     uint32_t                                   width,
+                     uint32_t                                   height,
+                     VkFormat                                   format);
+    void    reset();
+
+    device_memory   mem;
+    VkImage         im;
+    VkImageView     view;
+};
+
+struct memory_map {
+    memory_map(VkDevice dev, VkDeviceMemory mem);
+    memory_map(const device_memory& mem) : memory_map(mem.device, mem.mem) {}
+    memory_map(const buffer& buf) : memory_map(buf.mem) {}
+    memory_map(const image& im) : memory_map(im.mem) {}
+    ~memory_map();
+
+    VkDevice        dev;
+    VkDeviceMemory  mem;
+    void*           data;
+};
+
 
 struct alignas(16) float4 {
     float x;
@@ -226,8 +280,10 @@ void kernel_invocation::addPodArgument(const T& pod) {
     buffer scalar_args(mDevice, mMemoryProperties, sizeof(T));
     mPodBuffers.push_back(scalar_args);
 
-    memcpy(scalar_args.map(), &pod, sizeof(T));
-    scalar_args.unmap();
+    {
+        memory_map scalar_map(scalar_args);
+        memcpy(scalar_map.data, &pod, sizeof(T));
+    }
 
     addBufferArgument(scalar_args.buf);
 }
@@ -571,39 +627,27 @@ VkCommandBuffer allocate_command_buffer(VkDevice device, VkCommandPool cmd_pool)
 
 /* ============================================================================================== */
 
-void* buffer::map() const {
-    void* result = NULL;
-
-    VkResult U_ASSERT_ONLY res = vkMapMemory(device, mem, 0, VK_WHOLE_SIZE, 0, &result);
+memory_map::memory_map(VkDevice device, VkDeviceMemory memory) :
+        dev(device), mem(memory), data(nullptr)
+{
+    VkResult U_ASSERT_ONLY res = vkMapMemory(device, memory, 0, VK_WHOLE_SIZE, 0, &data);
     assert(res == VK_SUCCESS);
-
-    return result;
 }
 
-void buffer::unmap() const {
-    vkUnmapMemory(device, mem);
+memory_map::~memory_map() {
+    if (dev && mem) {
+        vkUnmapMemory(dev, mem);
+    }
 }
 
-void buffer::allocate(VkDevice                                  dev,
-                      const VkPhysicalDeviceMemoryProperties&   memory_properties,
-                      VkDeviceSize                              inNumBytes) {
+/* ============================================================================================== */
+
+void device_memory::allocate(VkDevice                                   dev,
+                             const VkMemoryRequirements&                mem_reqs,
+                             const VkPhysicalDeviceMemoryProperties&    memory_properties) {
     reset();
 
     device = dev;
-
-    // Allocate the buffer
-    VkBufferCreateInfo buf_info = {};
-    buf_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    buf_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-    buf_info.size = inNumBytes;
-    buf_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    VkResult U_ASSERT_ONLY res = vkCreateBuffer(device, &buf_info, NULL, &buf);
-    assert(res == VK_SUCCESS);
-
-    // Find out what we need in order to allocate memory for the buffer
-    VkMemoryRequirements mem_reqs = {};
-    vkGetBufferMemoryRequirements(device, buf, &mem_reqs);
 
     // Allocate memory for the buffer
     VkMemoryAllocateInfo alloc_info = {};
@@ -613,25 +657,118 @@ void buffer::allocate(VkDevice                                  dev,
                                                               mem_reqs.memoryTypeBits,
                                                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     assert(alloc_info.memoryTypeIndex < std::numeric_limits<uint32_t>::max() && "No mappable, coherent memory");
-    res = vkAllocateMemory(device, &alloc_info, NULL, &mem);
-    assert(res == VK_SUCCESS);
-
-    // Bind the memory to the buffer object
-    res = vkBindBufferMemory(device, buf, mem, 0);
+    VkResult U_ASSERT_ONLY res = vkAllocateMemory(device, &alloc_info, NULL, &mem);
     assert(res == VK_SUCCESS);
 }
 
-void buffer::reset() {
-    if (buf != VK_NULL_HANDLE) {
-        vkDestroyBuffer(device, buf, NULL);
-        buf = VK_NULL_HANDLE;
-    }
+void device_memory::reset() {
     if (mem != VK_NULL_HANDLE) {
         vkFreeMemory(device, mem, NULL);
         mem = VK_NULL_HANDLE;
     }
 
     device = VK_NULL_HANDLE;
+}
+
+
+/* ============================================================================================== */
+
+void buffer::allocate(VkDevice                                  dev,
+                      const VkPhysicalDeviceMemoryProperties&   memory_properties,
+                      VkDeviceSize                              inNumBytes) {
+    reset();
+
+    // Allocate the buffer
+    VkBufferCreateInfo buf_info = {};
+    buf_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    buf_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+    buf_info.size = inNumBytes;
+    buf_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    VkResult U_ASSERT_ONLY res = vkCreateBuffer(dev, &buf_info, NULL, &buf);
+    assert(res == VK_SUCCESS);
+
+    // Find out what we need in order to allocate memory for the buffer
+    VkMemoryRequirements mem_reqs = {};
+    vkGetBufferMemoryRequirements(dev, buf, &mem_reqs);
+
+    mem.allocate(dev, mem_reqs, memory_properties);
+
+    // Bind the memory to the buffer object
+    res = vkBindBufferMemory(dev, buf, mem.mem, 0);
+    assert(res == VK_SUCCESS);
+}
+
+void buffer::reset() {
+    if (buf != VK_NULL_HANDLE) {
+        vkDestroyBuffer(mem.device, buf, NULL);
+        buf = VK_NULL_HANDLE;
+    }
+
+    mem.reset();
+}
+
+/* ============================================================================================== */
+
+void image::allocate(VkDevice                                   dev,
+                     const VkPhysicalDeviceMemoryProperties&    memory_properties,
+                     uint32_t                                   width,
+                     uint32_t                                   height,
+                     VkFormat                                   format) {
+    reset();
+
+    VkImageCreateInfo imageInfo = {};
+    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+    imageInfo.imageType = VK_IMAGE_TYPE_2D;
+    imageInfo.format = format;
+    imageInfo.extent.width = width;
+    imageInfo.extent.height = height;
+    imageInfo.extent.depth = 1;
+    imageInfo.mipLevels = 1;
+    imageInfo.arrayLayers = 1;
+    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+    imageInfo.tiling = VK_IMAGE_TILING_LINEAR;
+    imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+    imageInfo.initialLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+    VkResult U_ASSERT_ONLY res = vkCreateImage(dev, &imageInfo, nullptr, &im);
+    assert(res == VK_SUCCESS);
+
+    // Find out what we need in order to allocate memory for the image
+    VkMemoryRequirements mem_reqs = {};
+    vkGetImageMemoryRequirements(dev, im, &mem_reqs);
+
+    mem.allocate(dev, mem_reqs, memory_properties);
+
+    // Bind the memory to the image object
+    res = vkBindImageMemory(dev, im, mem.mem, 0);
+    assert(res == VK_SUCCESS);
+
+    // Allocate the image view
+    VkImageViewCreateInfo viewInfo = {};
+    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+    viewInfo.image = im;
+    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+    viewInfo.format = format;
+    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+    viewInfo.subresourceRange.levelCount = 1;
+
+    res = vkCreateImageView(dev, &viewInfo, nullptr, &view);
+    assert(res == VK_SUCCESS);
+}
+
+void image::reset() {
+    if (view != VK_NULL_HANDLE) {
+        vkDestroyImageView(mem.device, view, NULL);
+        view = VK_NULL_HANDLE;
+    }
+    if (im != VK_NULL_HANDLE) {
+        vkDestroyImage(mem.device, im, NULL);
+        im = VK_NULL_HANDLE;
+    }
+
+    mem.reset();
 }
 
 /* ============================================================================================== */
@@ -1061,7 +1198,7 @@ void kernel_invocation::run(VkQueue                     queue,
 
 /* ============================================================================================== */
 
-void check_fill_results(const buffer&    buf,
+void check_fill_results(const device_memory&    buf,
                         int              width,
                         int              height,
                         int              pitch,
@@ -1072,8 +1209,10 @@ void check_fill_results(const buffer&    buf,
 
     unsigned int num_correct_pixels = 0;
     unsigned int num_incorrect_pixels = 0;
-    void* data = buf.map();
     {
+        memory_map map(buf);
+        void* const data = map.data;
+
         const float4* pixels = static_cast<const float4*>(data);
 
         const float4* row = pixels;
@@ -1098,7 +1237,6 @@ void check_fill_results(const buffer&    buf,
             }
         }
     }
-    buf.unmap();
 
     LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels, num_incorrect_pixels);
 }
@@ -1142,8 +1280,10 @@ void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sam
     const auto num_workgroups = std::make_tuple((scalars.inWidth + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
                                                 (scalars.inHeight + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
 
-    memset(image_buffer.map(), 0, buffer_size);
-    image_buffer.unmap();
+    {
+        memory_map im_map(image_buffer);
+        memset(im_map.data, 0, buffer_size);
+    }
     {
         kernel_invocation glslInvocation(info.device,
                                          info.cmd_pool,
@@ -1156,11 +1296,13 @@ void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sam
         glslInvocation.addPodArgument(scalars);
         glslInvocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
     }
-    check_fill_results(image_buffer, scalars.inWidth, scalars.inHeight,
+    check_fill_results(image_buffer.mem, scalars.inWidth, scalars.inHeight,
                        scalars.inPitch, scalars.inColor, "fills_glsl.spv/main");
 
-    memset(image_buffer.map(), 0, buffer_size);
-    image_buffer.unmap();
+    {
+        memory_map im_map(image_buffer);
+        memset(im_map.data, 0, buffer_size);
+    }
     {
         kernel_invocation oclInvocation(info.device,
                                         info.cmd_pool,
@@ -1173,7 +1315,7 @@ void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sam
         oclInvocation.addPodArgument(scalars);
         oclInvocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
     }
-    check_fill_results(image_buffer, scalars.inWidth, scalars.inHeight,
+    check_fill_results(image_buffer.mem, scalars.inWidth, scalars.inHeight,
                        scalars.inPitch, scalars.inColor, "fills.spv/FillWithColorKernel");
 
     image_buffer.reset();
@@ -1181,19 +1323,21 @@ void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sam
 
 /* ============================================================================================== */
 
-void check_copytofromimage_results(const buffer&    src,
-                                   const buffer&    dst,
+void check_copytofromimage_results(const device_memory& src,
+                                   const device_memory& dst,
                                    int              width,
                                    int              height,
                                    int              pitch,
                                    const char*      label,
-                                   bool             logIncorrect = false,
+                                   bool             logIncorrect = true,
                                    bool             logCorrect = false) {
     unsigned int num_correct_pixels = 0;
     unsigned int num_incorrect_pixels = 0;
 
-    void* src_data = src.map();
-    void* dst_data = dst.map();
+    memory_map src_map(src);
+    memory_map dst_map(dst);
+    void* src_data = src_map.data;
+    void* dst_data = dst_map.data;
 
     {
         const uchar4* src_pixels = static_cast<const uchar4*>(src_data);
@@ -1209,23 +1353,21 @@ void check_copytofromimage_results(const buffer&    src,
                 if (pixel_is_correct) {
                     ++num_correct_pixels;
                     if (logCorrect) {
-                        LOGE("%s:  CORRECT pixels{row:%d, col%d}",
-                             label, r, c);
+                        LOGE("%s:  CORRECT pixels{row:%d, col%d}", label, r, c);
                     }
                 }
                 else {
                     ++num_incorrect_pixels;
                     if (logIncorrect) {
-                        LOGE("%s: INCORRECT pixels{row:%d, col%d}",
-                             label, r, c);
+                        LOGE("%s: INCORRECT pixels{row:%d, col%d} expected{x=%x, y=%x, z=%x, w=%x} observed{x=%x, y=%x, z=%x, w=%x}",
+                             label, r, c,
+                             src_p->x, src_p->y, src_p->z, src_p->w,
+                             dst_p->x, dst_p->y, dst_p->z, dst_p->w);
                     }
                 }
             }
         }
     }
-
-    dst.unmap();
-    src.unmap();
 
     LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels, num_incorrect_pixels);
 }
@@ -1297,53 +1439,25 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
     buffer src_buffer(info, buffer_size);
     buffer dst_buffer(info, buffer_size);
 
-    // initialize source and destingation buffers
-    memset(src_buffer.map(), 0xaa, buffer_size);
-    src_buffer.unmap();
+    // Ok, need to allocate memory for the image and bind it. Duh.
 
-    memset(dst_buffer.map(), 0, buffer_size);
-    dst_buffer.unmap();
-#if 0
-    check_copytofromimage_results(src_buffer, dst_buffer,
+    // initialize source and destingation buffers
+    {
+        memory_map src_map(src_buffer);
+        memset(src_map.data, 0xaa, buffer_size);
+    }
+
+    {
+        memory_map dst_map(dst_buffer);
+        memset(dst_map.data, 0x55, buffer_size);
+    }
+#if 1
+    check_copytofromimage_results(src_buffer.mem, dst_buffer.mem,
                                   buffer_width, buffer_height, buffer_height,
                                   "should fail utterly");
 #endif
     // Create the destination image
-    VkImage image = VK_NULL_HANDLE;
-    {
-        VkImageCreateInfo imageInfo = {};
-        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-        imageInfo.imageType = VK_IMAGE_TYPE_2D;
-        imageInfo.format = VK_FORMAT_R8G8B8A8_UINT;
-        imageInfo.extent.width = buffer_width;
-        imageInfo.extent.height = buffer_height;
-        imageInfo.extent.depth = 1;
-        imageInfo.mipLevels = 1;
-        imageInfo.arrayLayers = 1;
-        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-        imageInfo.tiling = VK_IMAGE_TILING_LINEAR;
-        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-        imageInfo.initialLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-        VkResult U_ASSERT_ONLY res = vkCreateImage(info.device, &imageInfo, nullptr, &image);
-        assert(res == VK_SUCCESS);
-    }
-
-    // Create the destination image view
-    VkImageView imageView = VK_NULL_HANDLE;
-    {
-        VkImageViewCreateInfo viewInfo = {};
-        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-        viewInfo.image = image;
-        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-        viewInfo.format = VK_FORMAT_R8G8B8A8_UINT;
-        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-        viewInfo.subresourceRange.levelCount = 1;
-
-        VkResult U_ASSERT_ONLY res = vkCreateImageView(info.device, &viewInfo, nullptr, &imageView);
-        assert(res == VK_SUCCESS);
-    }
+    image   dstImage(info, buffer_width, buffer_height, VK_FORMAT_R8G8B8A8_UINT);
 
     const auto workgroup_sizes = std::make_tuple(32, 32);
     const auto num_workgroups = std::make_tuple((buffer_width + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
@@ -1358,11 +1472,16 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
 
         copyToImageInvocation.addLiteralSamplers(samplers.begin(), samplers.end());
         copyToImageInvocation.addBufferArgument(src_buffer.buf);
-        copyToImageInvocation.addWriteOnlyImageArgument(imageView);
+        copyToImageInvocation.addWriteOnlyImageArgument(dstImage.view);
         copyToImageInvocation.addPodArgument(to_image_scalars);
 
         copyToImageInvocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
     }
+
+    check_copytofromimage_results(src_buffer.mem, dstImage.mem,
+                                  buffer_width, buffer_height, buffer_height,
+                                  "intermediate check");
+
     {
         kernel_invocation copyFromImageInvocation(info.device,
                                                   info.cmd_pool,
@@ -1372,19 +1491,18 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
                                                   "memory.spvmap", "CopyImageToBufferKernel");
 
         copyFromImageInvocation.addLiteralSamplers(samplers.begin(), samplers.end());
-        copyFromImageInvocation.addReadOnlyImageArgument(imageView);
+        copyFromImageInvocation.addReadOnlyImageArgument(dstImage.view);
         copyFromImageInvocation.addBufferArgument(dst_buffer.buf);
         copyFromImageInvocation.addPodArgument(from_image_scalars);
 
         copyFromImageInvocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
     }
 
-    check_copytofromimage_results(src_buffer, dst_buffer,
+    check_copytofromimage_results(src_buffer.mem, dst_buffer.mem,
                                   buffer_width, buffer_height, buffer_height,
                                   "memory.spv/copybuffertofromimage");
 
-    vkDestroyImageView(info.device, imageView, nullptr);
-    vkDestroyImage(info.device, image, nullptr);
+    dstImage.reset();
     dst_buffer.reset();
     src_buffer.reset();
 }
