@@ -236,6 +236,31 @@ bool operator!=(const uchar4& l, const uchar4& r) {
     return !(l == r);
 }
 
+template <typename T>
+struct pixel_traits {};
+
+template <>
+struct pixel_traits<float4> {
+    static const int cl_pixel_type = CL_FLOAT;
+    static const VkFormat vk_pixel_type = VK_FORMAT_R32G32B32A32_SFLOAT;
+
+    static float4 translate(const float4& pixel) { return pixel; }
+    static float4 translate(const uchar4& pixel) {
+        return {pixel.x / 255.0f, pixel.y / 255.0f, pixel.z / 255.0f, pixel.w / 255.0f};
+    }
+};
+
+template <>
+struct pixel_traits<uchar4> {
+    static const int cl_pixel_type = CL_UNORM_INT8;
+    static const VkFormat vk_pixel_type = VK_FORMAT_R8G8B8A8_UNORM;
+
+    static uchar4 translate(const float4& pixel) {
+        return { (unsigned char) (pixel.x * 255.0f), (unsigned char) (pixel.y * 255.0f), (unsigned char) (pixel.z * 255.0f), (unsigned char) (pixel.w * 255.0f) };
+    }
+    static uchar4 translate(const uchar4& pixel) { return pixel; }
+};
+
 class kernel_invocation {
 public:
     typedef std::tuple<int,int> WorkgroupDimensions;
@@ -1358,21 +1383,22 @@ void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sam
 
 /* ============================================================================================== */
 
+template <typename SrcPixelType, typename DstPixelType>
 void check_copytofromimage_results(const device_memory& src,
                                    const device_memory& dst,
-                                   int              width,
-                                   int              height,
-                                   int              pitch,
-                                   const char*      label,
-                                   bool             logIncorrect = true,
-                                   bool             logCorrect = false) {
+                                   int                  width,
+                                   int                  height,
+                                   int                  pitch,
+                                   const char*          label,
+                                   bool                 logIncorrect = true,
+                                   bool                 logCorrect = false) {
     unsigned int num_correct_pixels = 0;
     unsigned int num_incorrect_pixels = 0;
 
     memory_map src_map(src);
     memory_map dst_map(dst);
-    auto src_pixels = static_cast<const float4*>(src_map.data);
-    auto dst_pixels = static_cast<const float4*>(dst_map.data);
+    auto src_pixels = static_cast<const SrcPixelType*>(src_map.data);
+    auto dst_pixels = static_cast<const DstPixelType*>(dst_map.data);
 
     {
         auto src_row = src_pixels;
@@ -1381,7 +1407,7 @@ void check_copytofromimage_results(const device_memory& src,
             auto src_p = src_row;
             auto dst_p = dst_row;
             for (int c = 0; c < width; ++c, ++src_p, ++dst_p) {
-                const bool pixel_is_correct = (*dst_p == *src_p);
+                const bool pixel_is_correct = (pixel_traits<float4>::translate(*dst_p) == pixel_traits<float4>::translate(*src_p));
                 if (pixel_is_correct) {
                     ++num_correct_pixels;
                     if (logCorrect) {
@@ -1391,10 +1417,12 @@ void check_copytofromimage_results(const device_memory& src,
                 else {
                     ++num_incorrect_pixels;
                     if (logIncorrect) {
+                        const float4 src_pixel = pixel_traits<float4>::translate(*src_p);
+                        const float4 dst_pixel = pixel_traits<float4>::translate(*dst_p);
                         LOGE("%s: INCORRECT pixels{row:%d, col%d} expected{x=%f, y=%f, z=%f, w=%f} observed{x=%f, y=%f, z=%f, w=%f}",
                              label, r, c,
-                             src_p->x, src_p->y, src_p->z, src_p->w,
-                             dst_p->x, dst_p->y, dst_p->z, dst_p->w);
+                             src_pixel.x, src_pixel.y, src_pixel.z, src_pixel.w,
+                             dst_pixel.x, dst_pixel.y, dst_pixel.z, dst_pixel.w);
                     }
                 }
             }
@@ -1444,11 +1472,14 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
     static_assert(20 == offsetof(from_image_scalar_args, inWidth), "inWidth offset incorrect");
     static_assert(24 == offsetof(from_image_scalar_args, inHeight), "inHeight offset incorrect");
 
+    typedef uchar4 buffer_pixel_t;
+    typedef float4 image_pixel_t;
+
     const to_image_scalar_args to_image_scalars = {
             0,              // inSrcOffset
             buffer_width,   // inSrcPitch
             CL_RGBA,        // inSrcChannelOrder
-            CL_FLOAT,       // inSrcChannelType
+            pixel_traits<buffer_pixel_t>::cl_pixel_type,    // inSrcChannelType
             0,              // inSwapComponents
             0,              // inPremultiply
             buffer_width,   // inWidth
@@ -1459,37 +1490,38 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
             0,              // inDestOffset
             buffer_width,   // inDestPitch
             CL_RGBA,        // inDestChannelOrder
-            CL_FLOAT,       // inDestChannelType
+            pixel_traits<buffer_pixel_t>::cl_pixel_type,    // inDestChannelType
             0,              // inSwapComponents
             buffer_width,   // inWidth
             buffer_height   // inHeight
     };
 
-    const std::size_t buffer_size = buffer_width * buffer_height * sizeof(float4);
+    const std::size_t buffer_size = buffer_width * buffer_height * sizeof(buffer_pixel_t);
 
     // allocate buffers and images
     buffer  src_buffer(info, buffer_size);
     buffer  dst_buffer(info, buffer_size);
-    image   dstImage(info, buffer_width, buffer_height, VK_FORMAT_R32G32B32A32_SFLOAT /* VK_FORMAT_R8G8B8A8_UINT */);
+    image   dstImage(info, buffer_width, buffer_height, pixel_traits<image_pixel_t>::vk_pixel_type);
 
     // initialize source and destination buffers
     {
-        const float4 src_value = { 0.2f, 0.4f, 0.6f, 0.8f };
+        const buffer_pixel_t src_value = pixel_traits<buffer_pixel_t>::translate((float4){ 0.2f, 0.4f, 0.8f, 1.0f });
         memory_map src_map(src_buffer);
-        float4* src_data = static_cast<float4*>(src_map.data);
+        auto src_data = static_cast<buffer_pixel_t*>(src_map.data);
         std::fill(src_data, src_data + (buffer_width * buffer_height), src_value);
     }
 
     {
-        const float4 dst_value = { 0.1f, 0.3f, 0.5f, 0.7f };
+        const buffer_pixel_t dst_value = pixel_traits<buffer_pixel_t>::translate((float4){ 0.1f, 0.3f, 0.5f, 0.7f });
         memory_map dst_map(dst_buffer);
-        float4* dst_data = static_cast<float4*>(dst_map.data);
+        auto dst_data = static_cast<buffer_pixel_t*>(dst_map.data);
         std::fill(dst_data, dst_data + (buffer_width * buffer_height), dst_value);
     }
 
-    check_copytofromimage_results(src_buffer.mem, dst_buffer.mem,
-                                  buffer_width, buffer_height, buffer_height,
-                                  "should fail utterly");
+    check_copytofromimage_results<buffer_pixel_t, buffer_pixel_t>(
+            src_buffer.mem, dst_buffer.mem,
+            buffer_width, buffer_height, buffer_height,
+            "should fail utterly");
 
     const auto workgroup_sizes = std::make_tuple(32, 32);
     const auto num_workgroups = std::make_tuple((buffer_width + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
@@ -1510,9 +1542,10 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
         copyToImageInvocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
     }
 
-    check_copytofromimage_results(src_buffer.mem, dstImage.mem,
-                                  buffer_width, buffer_height, buffer_height,
-                                  "intermediate check");
+    check_copytofromimage_results<buffer_pixel_t, image_pixel_t>(
+            src_buffer.mem, dstImage.mem,
+            buffer_width, buffer_height, buffer_height,
+            "intermediate check");
 
     {
         kernel_invocation copyFromImageInvocation(info.device,
@@ -1530,9 +1563,10 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
         copyFromImageInvocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
     }
 
-    check_copytofromimage_results(src_buffer.mem, dst_buffer.mem,
-                                  buffer_width, buffer_height, buffer_height,
-                                  "memory.spv/copybuffertofromimage");
+    check_copytofromimage_results<buffer_pixel_t, image_pixel_t>(
+            src_buffer.mem, dst_buffer.mem,
+            buffer_width, buffer_height, buffer_height,
+            "memory.spv/copybuffertofromimage");
 
     dstImage.reset();
     dst_buffer.reset();
