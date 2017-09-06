@@ -27,12 +27,24 @@ create and destroy a Vulkan physical device
 #include <algorithm>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <cassert>
 #include <cstdlib>
 #include <fstream>
 #include <iterator>
 #include <string>
 #include <util_init.hpp>
+
+template<class T>
+typename std::enable_if<!std::numeric_limits<T>::is_integer, bool>::type
+almost_equal(T x, T y, int ulp)
+{
+    // the machine epsilon has to be scaled to the magnitude of the values used
+    // and multiplied by the desired precision in ULPs (units in the last place)
+    return std::abs(x-y) < std::numeric_limits<T>::epsilon() * std::abs(x+y) * ulp
+           // unless the result is subnormal
+           || std::abs(x-y) < std::numeric_limits<T>::min();
+}
 
 /* cl_channel_order */
 #define CL_R                                        0x10B0
@@ -221,7 +233,11 @@ struct spv_map {
 };
 
 bool operator==(const float4& l, const float4& r) {
-    return (l.w == r.w && l.x == r.x && l.y == r.y && l.z == r.z);
+    const int ulp = 2;
+    return almost_equal(l.w, r.w, ulp)
+           && almost_equal(l.x, r.x, ulp)
+           && almost_equal(l.y, r.y, ulp)
+           && almost_equal(l.z, r.z, ulp);
 }
 
 bool operator!=(const float4& l, const float4& r) {
@@ -241,6 +257,7 @@ struct pixel_traits {};
 
 template <>
 struct pixel_traits<float4> {
+    static const int cl_pixel_order = CL_RGBA;
     static const int cl_pixel_type = CL_FLOAT;
     static const VkFormat vk_pixel_type = VK_FORMAT_R32G32B32A32_SFLOAT;
 
@@ -252,6 +269,7 @@ struct pixel_traits<float4> {
 
 template <>
 struct pixel_traits<uchar4> {
+    static const int cl_pixel_order = CL_RGBA;
     static const int cl_pixel_type = CL_UNORM_INT8;
     static const VkFormat vk_pixel_type = VK_FORMAT_R8G8B8A8_UNORM;
 
@@ -1390,7 +1408,7 @@ void check_copytofromimage_results(const device_memory& src,
                                    int                  height,
                                    int                  pitch,
                                    const char*          label,
-                                   bool                 logIncorrect = true,
+                                   bool                 logIncorrect = false,
                                    bool                 logCorrect = false) {
     unsigned int num_correct_pixels = 0;
     unsigned int num_incorrect_pixels = 0;
@@ -1407,7 +1425,9 @@ void check_copytofromimage_results(const device_memory& src,
             auto src_p = src_row;
             auto dst_p = dst_row;
             for (int c = 0; c < width; ++c, ++src_p, ++dst_p) {
-                const bool pixel_is_correct = (pixel_traits<float4>::translate(*dst_p) == pixel_traits<float4>::translate(*src_p));
+                const float4 src_pixel = pixel_traits<float4>::translate(*src_p);
+                const float4 dst_pixel = pixel_traits<float4>::translate(*dst_p);
+                const bool pixel_is_correct = (dst_pixel == src_pixel);
                 if (pixel_is_correct) {
                     ++num_correct_pixels;
                     if (logCorrect) {
@@ -1417,8 +1437,6 @@ void check_copytofromimage_results(const device_memory& src,
                 else {
                     ++num_incorrect_pixels;
                     if (logIncorrect) {
-                        const float4 src_pixel = pixel_traits<float4>::translate(*src_p);
-                        const float4 dst_pixel = pixel_traits<float4>::translate(*dst_p);
                         LOGE("%s: INCORRECT pixels{row:%d, col%d} expected{x=%f, y=%f, z=%f, w=%f} observed{x=%f, y=%f, z=%f, w=%f}",
                              label, r, c,
                              src_pixel.x, src_pixel.y, src_pixel.z, src_pixel.w,
@@ -1478,7 +1496,7 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
     const to_image_scalar_args to_image_scalars = {
             0,              // inSrcOffset
             buffer_width,   // inSrcPitch
-            CL_RGBA,        // inSrcChannelOrder
+            pixel_traits<buffer_pixel_t>::cl_pixel_order,   // inSrcChannelOrder
             pixel_traits<buffer_pixel_t>::cl_pixel_type,    // inSrcChannelType
             0,              // inSwapComponents
             0,              // inPremultiply
@@ -1489,7 +1507,7 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
     const from_image_scalar_args from_image_scalars = {
             0,              // inDestOffset
             buffer_width,   // inDestPitch
-            CL_RGBA,        // inDestChannelOrder
+            pixel_traits<buffer_pixel_t>::cl_pixel_order,   // inDestChannelOrder
             pixel_traits<buffer_pixel_t>::cl_pixel_type,    // inDestChannelType
             0,              // inSwapComponents
             buffer_width,   // inWidth
@@ -1563,7 +1581,7 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
         copyFromImageInvocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
     }
 
-    check_copytofromimage_results<buffer_pixel_t, image_pixel_t>(
+    check_copytofromimage_results<buffer_pixel_t, buffer_pixel_t>(
             src_buffer.mem, dst_buffer.mem,
             buffer_width, buffer_height, buffer_height,
             "memory.spv/copybuffertofromimage");
