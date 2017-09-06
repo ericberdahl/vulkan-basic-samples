@@ -35,6 +35,82 @@ create and destroy a Vulkan physical device
 #include <string>
 #include <util_init.hpp>
 
+/* ============================================================================================== */
+
+class Float16Compressor
+{
+    union Bits
+    {
+        float f;
+        int32_t si;
+        uint32_t ui;
+    };
+
+    static int const shift = 13;
+    static int const shiftSign = 16;
+
+    static int32_t const infN = 0x7F800000; // flt32 infinity
+    static int32_t const maxN = 0x477FE000; // max flt16 normal as a flt32
+    static int32_t const minN = 0x38800000; // min flt16 normal as a flt32
+    static int32_t const signN = 0x80000000; // flt32 sign bit
+
+    static int32_t const infC = infN >> shift;
+    static int32_t const nanN = (infC + 1) << shift; // minimum flt16 nan as a flt32
+    static int32_t const maxC = maxN >> shift;
+    static int32_t const minC = minN >> shift;
+    static int32_t const signC = signN >> shiftSign; // flt16 sign bit
+
+    static int32_t const mulN = 0x52000000; // (1 << 23) / minN
+    static int32_t const mulC = 0x33800000; // minN / (1 << (23 - shift))
+
+    static int32_t const subC = 0x003FF; // max flt32 subnormal down shifted
+    static int32_t const norC = 0x00400; // min flt32 normal down shifted
+
+    static int32_t const maxD = infC - maxC - 1;
+    static int32_t const minD = minC - subC - 1;
+
+public:
+
+    static uint16_t compress(float value)
+    {
+        Bits v, s;
+        v.f = value;
+        uint32_t sign = v.si & signN;
+        v.si ^= sign;
+        sign >>= shiftSign; // logical shift
+        s.si = mulN;
+        s.si = s.f * v.f; // correct subnormals
+        v.si ^= (s.si ^ v.si) & -(minN > v.si);
+        v.si ^= (infN ^ v.si) & -((infN > v.si) & (v.si > maxN));
+        v.si ^= (nanN ^ v.si) & -((nanN > v.si) & (v.si > infN));
+        v.ui >>= shift; // logical shift
+        v.si ^= ((v.si - maxD) ^ v.si) & -(v.si > maxC);
+        v.si ^= ((v.si - minD) ^ v.si) & -(v.si > subC);
+        return v.ui | sign;
+    }
+
+    static float decompress(uint16_t value)
+    {
+        Bits v;
+        v.ui = value;
+        int32_t sign = v.si & signC;
+        v.si ^= sign;
+        sign <<= shiftSign;
+        v.si ^= ((v.si + minD) ^ v.si) & -(v.si > subC);
+        v.si ^= ((v.si + maxD) ^ v.si) & -(v.si > maxC);
+        Bits s;
+        s.si = mulC;
+        s.f *= v.si;
+        int32_t mask = -(norC > v.si);
+        v.si <<= shift;
+        v.si ^= (s.si ^ v.si) & mask;
+        v.si |= sign;
+        return v.f;
+    }
+};
+
+/* ============================================================================================== */
+
 template<class T>
 typename std::enable_if<!std::numeric_limits<T>::is_integer, bool>::type
 almost_equal(T x, T y, int ulp)
@@ -45,6 +121,8 @@ almost_equal(T x, T y, int ulp)
            // unless the result is subnormal
            || std::abs(x-y) < std::numeric_limits<T>::min();
 }
+
+/* ============================================================================================== */
 
 /* cl_channel_order */
 #define CL_R                                        0x10B0
@@ -197,6 +275,15 @@ struct uchar4 {
 };
 static_assert(sizeof(uchar4) == 4, "bad size for uchar4");
 
+struct half4 {
+    uint16_t    x;
+    uint16_t    y;
+    uint16_t    z;
+    uint16_t    w;
+};
+static_assert(sizeof(half4) == 8, "bad size for half4");
+
+
 struct spv_map {
     struct sampler {
         sampler() : opencl_flags(0), binding(-1) {};
@@ -252,17 +339,36 @@ bool operator!=(const uchar4& l, const uchar4& r) {
     return !(l == r);
 }
 
+bool operator==(const half4& l, const half4& r) {
+    return (l.w == r.w && l.x == r.x && l.y == r.y && l.z == r.z);
+}
+
+bool operator!=(const half4& l, const half4& r) {
+    return !(l == r);
+}
+
 template <typename T>
 struct pixel_traits {};
 
 template <>
 struct pixel_traits<float4> {
+    static const int device_pixel_format = 1; // kDevicePixelFormat_BGRA_4444_32f
     static const int cl_pixel_order = CL_RGBA;
     static const int cl_pixel_type = CL_FLOAT;
     static constexpr const char* const type_name = "float4";
     static const VkFormat vk_pixel_type = VK_FORMAT_R32G32B32A32_SFLOAT;
 
     static float4 translate(const float4& pixel) { return pixel; }
+
+    static float4 translate(const half4& pixel) {
+        return {
+                Float16Compressor::decompress(pixel.x),
+                Float16Compressor::decompress(pixel.y),
+                Float16Compressor::decompress(pixel.z),
+                Float16Compressor::decompress(pixel.w)
+        };
+    }
+
     static float4 translate(const uchar4& pixel) {
         return {pixel.x / 255.0f, pixel.y / 255.0f, pixel.z / 255.0f, pixel.w / 255.0f};
     }
@@ -278,7 +384,32 @@ struct pixel_traits<uchar4> {
     static uchar4 translate(const float4& pixel) {
         return { (unsigned char) (pixel.x * 255.0f), (unsigned char) (pixel.y * 255.0f), (unsigned char) (pixel.z * 255.0f), (unsigned char) (pixel.w * 255.0f) };
     }
+
+    static uchar4 translate(const half4& pixel) { return translate(pixel_traits<float4>::translate(pixel)); }
+
     static uchar4 translate(const uchar4& pixel) { return pixel; }
+};
+
+template <>
+struct pixel_traits<half4> {
+    static const int device_pixel_format = 0; // kDevicePixelFormat_BGRA_4444_16f
+    static const int cl_pixel_order = CL_RGBA;
+    static const int cl_pixel_type = CL_HALF_FLOAT;
+    static constexpr const char* const type_name = "half4";
+    static const VkFormat vk_pixel_type = VK_FORMAT_R16G16B16A16_SFLOAT;
+
+    static half4 translate(const float4& pixel) {
+        return {
+                Float16Compressor::compress(pixel.x),
+                Float16Compressor::compress(pixel.y),
+                Float16Compressor::compress(pixel.z),
+                Float16Compressor::compress(pixel.w)
+        };
+    }
+
+    static half4 translate(const half4& pixel) { return pixel; }
+
+    static half4 translate(const uchar4& pixel) { return translate(pixel_traits<float4>::translate(pixel)); }
 };
 
 class kernel_invocation {
@@ -1278,6 +1409,7 @@ void kernel_invocation::run(VkQueue                     queue,
 
 /* ============================================================================================== */
 
+template <typename PixelType>
 void check_fill_results(const device_memory&    buf,
                         int              width,
                         int              height,
@@ -1285,33 +1417,32 @@ void check_fill_results(const device_memory&    buf,
                         const float4&    expected,
                         const char*      label,
                         bool             logIncorrect = false,
-                        bool             logCorrect = false) {
+                        bool             logCorrect = true) {
 
     unsigned int num_correct_pixels = 0;
     unsigned int num_incorrect_pixels = 0;
     {
         memory_map map(buf);
-        void* const data = map.data;
+        auto pixels = static_cast<const PixelType*>(map.data);
 
-        const float4* pixels = static_cast<const float4*>(data);
-
-        const float4* row = pixels;
+        auto row = pixels;
         for (int r = 0; r < height; ++r, row += pitch) {
-            const float4* p = row;
+            auto p = row;
             for (int c = 0; c < width; ++c, ++p) {
-                const bool pixel_is_correct = (*p == expected);
+                const float4 src_pixel = pixel_traits<float4>::translate(*p);
+                const bool pixel_is_correct = (expected == src_pixel);
                 if (pixel_is_correct) {
                     ++num_correct_pixels;
                     if (logCorrect) {
                         LOGE("%s:  CORRECT pixels{row:%d, col%d} = {x=%f, y=%f, z=%f, w=%f}",
-                             label, r, c, p->x, p->y, p->z, p->w);
+                             label, r, c, src_pixel.x, src_pixel.y, src_pixel.z, src_pixel.w);
                     }
                 }
                 else {
                     ++num_incorrect_pixels;
                     if (logIncorrect) {
                         LOGE("%s: INCORRECT pixels{row:%d, col%d} = {x=%f, y=%f, z=%f, w=%f}",
-                             label, r, c, p->x, p->y, p->z, p->w);
+                             label, r, c, src_pixel.x, src_pixel.y, src_pixel.z, src_pixel.w);
                     }
                 }
             }
@@ -1321,7 +1452,10 @@ void check_fill_results(const device_memory&    buf,
     LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels, num_incorrect_pixels);
 }
 
+template <typename PixelType>
 void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& samplers) {
+    const std::string typeLabel = pixel_traits<PixelType>::type_name;
+
     const int buffer_height = 64;
     const int buffer_width = 64;
 
@@ -1344,7 +1478,7 @@ void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sam
 
     const scalar_args scalars = {
             buffer_width,               // inPitch
-            1,                          // inDeviceFormat - kDevicePixelFormat_BGRA_4444_32f
+            pixel_traits<PixelType>::device_pixel_format,   // inDeviceFormat
             0,                          // inOffsetX
             0,                          // inOffsetY
             buffer_width,               // inWidth
@@ -1353,52 +1487,41 @@ void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sam
     };
 
     // allocate image buffer
-    const std::size_t buffer_size = scalars.inPitch * scalars.inHeight * sizeof(float4);
-    buffer image_buffer(info, buffer_size);
+    const std::size_t buffer_size = scalars.inPitch * scalars.inHeight * sizeof(PixelType);
+    buffer dst_buffer(info, buffer_size);
 
     const auto workgroup_sizes = std::make_tuple(32, 32);
     const auto num_workgroups = std::make_tuple((scalars.inWidth + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
                                                 (scalars.inHeight + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
 
     {
-        memory_map im_map(image_buffer);
-        memset(im_map.data, 0, buffer_size);
+        const PixelType src_value = pixel_traits<PixelType>::translate((float4){ 0.0f, 0.0f, 0.0f, 0.0f });
+
+        memory_map dst_map(dst_buffer);
+        auto dst_data = static_cast<PixelType*>(dst_map.data);
+        std::fill(dst_data, dst_data + (buffer_width * buffer_height), src_value);
     }
     {
-        kernel_invocation glslInvocation(info.device,
+        kernel_invocation fillInvocation(info.device,
                                          info.cmd_pool,
                                          info.desc_pool,
                                          info.memory_properties,
-                                         "fills_glsl.spv", "main",
+                                         "fills.spv", "FillWithColorKernel",
                                          "fills.spvmap", "FillWithColorKernel");
-        glslInvocation.addLiteralSamplers(samplers.begin(), samplers.end());
-        glslInvocation.addBufferArgument(image_buffer.buf);
-        glslInvocation.addPodArgument(scalars);
-        glslInvocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
+        fillInvocation.addLiteralSamplers(samplers.begin(), samplers.end());
+        fillInvocation.addBufferArgument(dst_buffer.buf);
+        fillInvocation.addPodArgument(scalars);
+        fillInvocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
     }
-    check_fill_results(image_buffer.mem, scalars.inWidth, scalars.inHeight,
-                       scalars.inPitch, scalars.inColor, "fills_glsl.spv/main");
 
-    {
-        memory_map im_map(image_buffer);
-        memset(im_map.data, 0, buffer_size);
-    }
-    {
-        kernel_invocation oclInvocation(info.device,
-                                        info.cmd_pool,
-                                        info.desc_pool,
-                                        info.memory_properties,
-                                        "fills.spv", "FillWithColorKernel",
-                                        "fills.spvmap", "FillWithColorKernel");
-        oclInvocation.addLiteralSamplers(samplers.begin(), samplers.end());
-        oclInvocation.addBufferArgument(image_buffer.buf);
-        oclInvocation.addPodArgument(scalars);
-        oclInvocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
-    }
-    check_fill_results(image_buffer.mem, scalars.inWidth, scalars.inHeight,
-                       scalars.inPitch, scalars.inColor, "fills.spv/FillWithColorKernel");
+    std::string testLabel = "fills.spv/FillWithColorKernel/";
+    testLabel += typeLabel;
+    check_fill_results<PixelType>(dst_buffer.mem,
+                                  scalars.inWidth, scalars.inHeight, scalars.inPitch,
+                                  scalars.inColor,
+                                  testLabel.c_str());
 
-    image_buffer.reset();
+    dst_buffer.reset();
 }
 
 /* ============================================================================================== */
@@ -1634,7 +1757,9 @@ int sample_main(int argc, char *argv[]) {
                    std::back_inserter(samplers),
                    std::bind(create_compatible_sampler, info.device, std::placeholders::_1));
 
-    run_fill_kernel(info, samplers);
+    run_fill_kernel<float4>(info, samplers);
+    vkResetDescriptorPool(info.device, info.desc_pool, 0);
+    run_fill_kernel<half4>(info, samplers);
     vkResetDescriptorPool(info.device, info.desc_pool, 0);
     run_copytofromimage_kernels<float4,float4>(info, samplers);
     vkResetDescriptorPool(info.device, info.desc_pool, 0);
