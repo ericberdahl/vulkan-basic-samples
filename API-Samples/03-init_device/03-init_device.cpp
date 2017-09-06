@@ -576,7 +576,7 @@ void my_init_descriptor_pool(struct sample_info &info) {
 
     VkDescriptorPoolCreateInfo createInfo = {};
     createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
-    createInfo.maxSets = 2;
+    createInfo.maxSets = 64;
     createInfo.poolSizeCount = sizeof(type_count) / sizeof(type_count[0]);
     createInfo.pPoolSizes = type_count;
 
@@ -1450,7 +1450,15 @@ void check_copytofromimage_results(const device_memory& src,
     LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels, num_incorrect_pixels);
 }
 
+template <typename BufferPixelType, typename ImagePixelType>
 void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkSampler>& samplers) {
+    typedef BufferPixelType buffer_pixel_t;
+    typedef ImagePixelType image_pixel_t;
+
+    std::string typeLabel = typeid(BufferPixelType).name();
+    typeLabel += '-';
+    typeLabel += typeid(ImagePixelType).name();
+
     const int buffer_height = 64;
     const int buffer_width = 64;
 
@@ -1489,9 +1497,6 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
     static_assert(16 == offsetof(from_image_scalar_args, inSwapComponents), "inSwapComponents offset incorrect");
     static_assert(20 == offsetof(from_image_scalar_args, inWidth), "inWidth offset incorrect");
     static_assert(24 == offsetof(from_image_scalar_args, inHeight), "inHeight offset incorrect");
-
-    typedef uchar4 buffer_pixel_t;
-    typedef float4 image_pixel_t;
 
     const to_image_scalar_args to_image_scalars = {
             0,              // inSrcOffset
@@ -1536,11 +1541,6 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
         std::fill(dst_data, dst_data + (buffer_width * buffer_height), dst_value);
     }
 
-    check_copytofromimage_results<buffer_pixel_t, buffer_pixel_t>(
-            src_buffer.mem, dst_buffer.mem,
-            buffer_width, buffer_height, buffer_height,
-            "should fail utterly");
-
     const auto workgroup_sizes = std::make_tuple(32, 32);
     const auto num_workgroups = std::make_tuple((buffer_width + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
                                                 (buffer_height + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
@@ -1560,10 +1560,12 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
         copyToImageInvocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
     }
 
+    std::string testLabel = "memory.spv/CopyBufferToImageKernel/";
+    testLabel += typeLabel;
     check_copytofromimage_results<buffer_pixel_t, image_pixel_t>(
             src_buffer.mem, dstImage.mem,
             buffer_width, buffer_height, buffer_height,
-            "intermediate check");
+            testLabel.c_str());
 
     {
         kernel_invocation copyFromImageInvocation(info.device,
@@ -1581,10 +1583,12 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
         copyFromImageInvocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
     }
 
+    testLabel = "memory.spv/CopyImageToBufferKernel/";
+    testLabel += typeLabel;
     check_copytofromimage_results<buffer_pixel_t, buffer_pixel_t>(
             src_buffer.mem, dst_buffer.mem,
             buffer_width, buffer_height, buffer_height,
-            "memory.spv/copybuffertofromimage");
+            testLabel.c_str());
 
     dstImage.reset();
     dst_buffer.reset();
@@ -1629,7 +1633,11 @@ int sample_main(int argc, char *argv[]) {
                    std::bind(create_compatible_sampler, info.device, std::placeholders::_1));
 
     run_fill_kernel(info, samplers);
-    run_copytofromimage_kernels(info, samplers);
+//    vkResetDescriptorPool(info.device, info.desc_pool, 0);
+    run_copytofromimage_kernels<float4,float4>(info, samplers);
+//    vkResetDescriptorPool(info.device, info.desc_pool, 0);
+    run_copytofromimage_kernels<uchar4,float4>(info, samplers);
+//    vkResetDescriptorPool(info.device, info.desc_pool, 0);
 
     //
     // Clean up
