@@ -259,6 +259,7 @@ template <>
 struct pixel_traits<float4> {
     static const int cl_pixel_order = CL_RGBA;
     static const int cl_pixel_type = CL_FLOAT;
+    static constexpr const char* const type_name = "float4";
     static const VkFormat vk_pixel_type = VK_FORMAT_R32G32B32A32_SFLOAT;
 
     static float4 translate(const float4& pixel) { return pixel; }
@@ -271,6 +272,7 @@ template <>
 struct pixel_traits<uchar4> {
     static const int cl_pixel_order = CL_RGBA;
     static const int cl_pixel_type = CL_UNORM_INT8;
+    static constexpr const char* const type_name = "uchar4";
     static const VkFormat vk_pixel_type = VK_FORMAT_R8G8B8A8_UNORM;
 
     static uchar4 translate(const float4& pixel) {
@@ -1455,9 +1457,9 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
     typedef BufferPixelType buffer_pixel_t;
     typedef ImagePixelType image_pixel_t;
 
-    std::string typeLabel = typeid(BufferPixelType).name();
+    std::string typeLabel = pixel_traits<BufferPixelType>::type_name;
     typeLabel += '-';
-    typeLabel += typeid(ImagePixelType).name();
+    typeLabel += pixel_traits<ImagePixelType>::type_name;
 
     const int buffer_height = 64;
     const int buffer_width = 64;
@@ -1633,11 +1635,11 @@ int sample_main(int argc, char *argv[]) {
                    std::bind(create_compatible_sampler, info.device, std::placeholders::_1));
 
     run_fill_kernel(info, samplers);
-//    vkResetDescriptorPool(info.device, info.desc_pool, 0);
+    vkResetDescriptorPool(info.device, info.desc_pool, 0);
     run_copytofromimage_kernels<float4,float4>(info, samplers);
-//    vkResetDescriptorPool(info.device, info.desc_pool, 0);
+    vkResetDescriptorPool(info.device, info.desc_pool, 0);
     run_copytofromimage_kernels<uchar4,float4>(info, samplers);
-//    vkResetDescriptorPool(info.device, info.desc_pool, 0);
+    vkResetDescriptorPool(info.device, info.desc_pool, 0);
 
     //
     // Clean up
