@@ -267,6 +267,12 @@ struct alignas(16) float4 {
 };
 static_assert(sizeof(float4) == 16, "bad size for float4");
 
+struct alignas(8) float2 {
+    float x;
+    float y;
+};
+static_assert(sizeof(float2) == 8, "bad size for float2");
+
 struct uchar4 {
     unsigned char   x;
     unsigned char   y;
@@ -283,6 +289,16 @@ struct half4 {
 };
 static_assert(sizeof(half4) == 8, "bad size for half4");
 
+struct half2 {
+    uint16_t    x;
+    uint16_t    y;
+};
+static_assert(sizeof(half2) == 4, "bad size for half2");
+
+struct half {
+    uint16_t    x;
+};
+static_assert(sizeof(half) == 2, "bad size for half");
 
 struct spv_map {
     struct sampler {
@@ -360,6 +376,10 @@ struct pixel_traits<float4> {
 
     static float4 translate(const float4& pixel) { return pixel; }
 
+    static float4 translate(const float2& pixel) { return { pixel.x, pixel.y, 0.0f, 0.0f }; }
+
+    static float4 translate(float pixel) { return { pixel, 0.0f, 0.0f, 0.0f }; }
+
     static float4 translate(const half4& pixel) {
         return {
                 Float16Compressor::decompress(pixel.x),
@@ -369,8 +389,44 @@ struct pixel_traits<float4> {
         };
     }
 
+    static float4 translate(const half& pixel) {
+        return translate((half4){ pixel.x, 0, 0, 0 });
+    }
+
     static float4 translate(const uchar4& pixel) {
         return {pixel.x / 255.0f, pixel.y / 255.0f, pixel.z / 255.0f, pixel.w / 255.0f};
+    }
+
+    static float4 translate(unsigned char pixel) {
+        return translate((uchar4){ pixel, 0, 0, 0 });
+    }
+};
+
+template <>
+struct pixel_traits<float2> {
+    static const int cl_pixel_order = CL_RG;
+    static const int cl_pixel_type = CL_FLOAT;
+    static constexpr const char* const type_name = "float2";
+    static const VkFormat vk_pixel_type = VK_FORMAT_R32G32_SFLOAT;
+
+    static float2 translate(const float2& pixel) { return pixel; }
+
+    static float2 translate(const float4& pixel) {
+        return { pixel.x, pixel.y };
+    }
+};
+
+template <>
+struct pixel_traits<float> {
+    static const int cl_pixel_order = CL_R;
+    static const int cl_pixel_type = CL_FLOAT;
+    static constexpr const char* const type_name = "float";
+    static const VkFormat vk_pixel_type = VK_FORMAT_R32_SFLOAT;
+
+    static float translate(const float& pixel) { return pixel; }
+
+    static float translate(const float4& pixel) {
+        return pixel.x;
     }
 };
 
@@ -385,9 +441,21 @@ struct pixel_traits<uchar4> {
         return { (unsigned char) (pixel.x * 255.0f), (unsigned char) (pixel.y * 255.0f), (unsigned char) (pixel.z * 255.0f), (unsigned char) (pixel.w * 255.0f) };
     }
 
-    static uchar4 translate(const half4& pixel) { return translate(pixel_traits<float4>::translate(pixel)); }
-
     static uchar4 translate(const uchar4& pixel) { return pixel; }
+};
+
+template <>
+struct pixel_traits<unsigned char> {
+    static const int cl_pixel_order = CL_R;
+    static const int cl_pixel_type = CL_UNORM_INT8;
+    static constexpr const char* const type_name = "uchar";
+    static const VkFormat vk_pixel_type = VK_FORMAT_R8_UNORM;
+
+    static unsigned char translate(const float4& pixel) {
+        return (unsigned char) (pixel.x * 255.0f);
+    }
+
+    static unsigned char translate(const unsigned char& pixel) { return pixel; }
 };
 
 template <>
@@ -408,8 +476,39 @@ struct pixel_traits<half4> {
     }
 
     static half4 translate(const half4& pixel) { return pixel; }
+};
 
-    static half4 translate(const uchar4& pixel) { return translate(pixel_traits<float4>::translate(pixel)); }
+template <>
+struct pixel_traits<half2> {
+    static const int cl_pixel_order = CL_RG;
+    static const int cl_pixel_type = CL_HALF_FLOAT;
+    static constexpr const char* const type_name = "half2";
+    static const VkFormat vk_pixel_type = VK_FORMAT_R16G16_SFLOAT;
+
+    static half2 translate(const half2& pixel) { return pixel; }
+
+    static half2 translate(const float4& pixel) {
+        return {
+                Float16Compressor::compress(pixel.x),
+                Float16Compressor::compress(pixel.y)
+        };
+    }
+};
+
+template <>
+struct pixel_traits<half> {
+    static const int cl_pixel_order = CL_R;
+    static const int cl_pixel_type = CL_HALF_FLOAT;
+    static constexpr const char* const type_name = "half";
+    static const VkFormat vk_pixel_type = VK_FORMAT_R16_SFLOAT;
+
+    static half translate(const half& pixel) { return pixel; }
+
+    static half translate(const float4& pixel) {
+        return {
+                Float16Compressor::compress(pixel.x)
+        };
+    }
 };
 
 class kernel_invocation {
@@ -1786,8 +1885,14 @@ int sample_main(int argc, char *argv[]) {
 
     run_fill_kernel<float4>(info, samplers);
     run_fill_kernel<half4>(info, samplers);
-    run_copytofromimage_kernels<float4,float4>(info, samplers);
+
+    run_copytofromimage_kernels<unsigned char,float4>(info, samplers);
     run_copytofromimage_kernels<uchar4,float4>(info, samplers);
+    run_copytofromimage_kernels<half,float4>(info, samplers);
+    run_copytofromimage_kernels<half4,float4>(info, samplers);
+    run_copytofromimage_kernels<float,float4>(info, samplers);
+    run_copytofromimage_kernels<float2,float4>(info, samplers);
+    run_copytofromimage_kernels<float4,float4>(info, samplers);
 
     //
     // Clean up
