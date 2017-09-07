@@ -712,6 +712,7 @@ void my_init_descriptor_pool(struct sample_info &info) {
     createInfo.maxSets = 64;
     createInfo.poolSizeCount = sizeof(type_count) / sizeof(type_count[0]);
     createInfo.pPoolSizes = type_count;
+    createInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
 
     VkResult U_ASSERT_ONLY res = vkCreateDescriptorPool(info.device, &createInfo, NULL, &info.desc_pool);
     assert(res == VK_SUCCESS);
@@ -1758,13 +1759,9 @@ int sample_main(int argc, char *argv[]) {
                    std::bind(create_compatible_sampler, info.device, std::placeholders::_1));
 
     run_fill_kernel<float4>(info, samplers);
-    vkResetDescriptorPool(info.device, info.desc_pool, 0);
     run_fill_kernel<half4>(info, samplers);
-    vkResetDescriptorPool(info.device, info.desc_pool, 0);
     run_copytofromimage_kernels<float4,float4>(info, samplers);
-    vkResetDescriptorPool(info.device, info.desc_pool, 0);
     run_copytofromimage_kernels<uchar4,float4>(info, samplers);
-    vkResetDescriptorPool(info.device, info.desc_pool, 0);
 
     //
     // Clean up
