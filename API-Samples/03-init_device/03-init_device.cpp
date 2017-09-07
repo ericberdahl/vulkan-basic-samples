@@ -1410,48 +1410,126 @@ void kernel_invocation::run(VkQueue                     queue,
 
 /* ============================================================================================== */
 
-template <typename PixelType>
-void check_fill_results(const device_memory&    buf,
-                        int              width,
-                        int              height,
-                        int              pitch,
-                        const float4&    expected,
-                        const char*      label,
-                        bool             logIncorrect = false,
-                        bool             logCorrect = true) {
 
+template <typename ExpectedPixelType, typename ObservedPixelType>
+bool check_result(ExpectedPixelType expected_pixel,
+                  ObservedPixelType observed_pixel,
+                  const char*       label,
+                  int               row,
+                  int               column,
+                  bool              logIncorrect = false,
+                  bool              logCorrect = false) {
+    const float4 expected_float = pixel_traits<float4>::translate(expected_pixel);
+    const float4 observed_float = pixel_traits<float4>::translate(observed_pixel);
+
+    const bool pixel_is_correct = (observed_float == expected_float);
+    if (pixel_is_correct) {
+        if (logCorrect) {
+            LOGE("%s:  CORRECT pixel{row:%d, col%d}", label, row, column);
+        }
+    }
+    else {
+        if (logIncorrect) {
+            LOGE("%s: INCORRECT pixel{row:%d, col%d} expected{x=%f, y=%f, z=%f, w=%f} observed{x=%f, y=%f, z=%f, w=%f}",
+                 label, row, column,
+                 expected_float.x, expected_float.y, expected_float.z, expected_float.w,
+                 observed_float.x, observed_float.y, observed_float.z, observed_float.w);
+        }
+    }
+
+    return pixel_is_correct;
+}
+
+template <typename ObservedPixelType, typename ExpectedPixelType>
+void check_results(const ObservedPixelType* observed_pixels,
+                   int                      width,
+                   int                      height,
+                   int                      pitch,
+                   ExpectedPixelType        expected,
+                   const char*              label,
+                   bool                     logIncorrect = false,
+                   bool                     logCorrect = false) {
     unsigned int num_correct_pixels = 0;
     unsigned int num_incorrect_pixels = 0;
-    {
-        memory_map map(buf);
-        auto pixels = static_cast<const PixelType*>(map.data);
 
-        auto row = pixels;
-        for (int r = 0; r < height; ++r, row += pitch) {
-            auto p = row;
-            for (int c = 0; c < width; ++c, ++p) {
-                const float4 src_pixel = pixel_traits<float4>::translate(*p);
-                const bool pixel_is_correct = (expected == src_pixel);
-                if (pixel_is_correct) {
-                    ++num_correct_pixels;
-                    if (logCorrect) {
-                        LOGE("%s:  CORRECT pixels{row:%d, col%d} = {x=%f, y=%f, z=%f, w=%f}",
-                             label, r, c, src_pixel.x, src_pixel.y, src_pixel.z, src_pixel.w);
-                    }
-                }
-                else {
-                    ++num_incorrect_pixels;
-                    if (logIncorrect) {
-                        LOGE("%s: INCORRECT pixels{row:%d, col%d} = {x=%f, y=%f, z=%f, w=%f}",
-                             label, r, c, src_pixel.x, src_pixel.y, src_pixel.z, src_pixel.w);
-                    }
-                }
+    auto row = observed_pixels;
+    for (int r = 0; r < height; ++r, row += pitch) {
+        auto p = row;
+        for (int c = 0; c < width; ++c, ++p) {
+            if (check_result(expected, *p, label, r, c, logIncorrect, logCorrect)) {
+                ++num_correct_pixels;
+            }
+            else {
+                ++num_incorrect_pixels;
             }
         }
     }
 
     LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels, num_incorrect_pixels);
 }
+
+template <typename ExpectedPixelType, typename ObservedPixelType>
+void check_results(const ExpectedPixelType* expected_pixels,
+                   const ObservedPixelType* observed_pixels,
+                   int                      width,
+                   int                      height,
+                   int                      pitch,
+                   const char*              label,
+                   bool                     logIncorrect = false,
+                   bool                     logCorrect = false) {
+    unsigned int num_correct_pixels = 0;
+    unsigned int num_incorrect_pixels = 0;
+
+    auto expected_row = expected_pixels;
+    auto observed_row = observed_pixels;
+    for (int r = 0; r < height; ++r, expected_row += pitch, observed_row += pitch) {
+        auto expected_p = expected_row;
+        auto observed_p = observed_row;
+        for (int c = 0; c < width; ++c, ++expected_p, ++observed_p) {
+            if (check_result(*expected_p, *observed_p, label, r, c, logIncorrect, logCorrect)) {
+                ++num_correct_pixels;
+            }
+            else {
+                ++num_incorrect_pixels;
+            }
+        }
+    }
+
+    LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels, num_incorrect_pixels);
+}
+
+template <typename ExpectedPixelType, typename ObservedPixelType>
+void check_results(const device_memory& expected,
+                   const device_memory& observed,
+                   int                  width,
+                   int                  height,
+                   int                  pitch,
+                   const char*          label,
+                   bool                 logIncorrect = false,
+                   bool                 logCorrect = false) {
+    memory_map src_map(expected);
+    memory_map dst_map(observed);
+    auto src_pixels = static_cast<const ExpectedPixelType*>(src_map.data);
+    auto dst_pixels = static_cast<const ObservedPixelType*>(dst_map.data);
+
+    check_results(src_pixels, dst_pixels, width, height, pitch, label, logIncorrect, logCorrect);
+}
+
+template <typename ObservedPixelType>
+void check_results(const device_memory& observed,
+                   int                  width,
+                   int                  height,
+                   int                  pitch,
+                   const float4&        expected,
+                   const char*          label,
+                   bool                 logIncorrect = false,
+                   bool                 logCorrect = false) {
+    memory_map map(observed);
+    auto pixels = static_cast<const ObservedPixelType*>(map.data);
+    check_results(pixels, width, height, pitch, expected, label, logIncorrect, logCorrect);
+}
+
+/* ============================================================================================== */
 
 template <typename PixelType>
 void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& samplers) {
@@ -1517,70 +1595,18 @@ void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sam
 
     std::string testLabel = "fills.spv/FillWithColorKernel/";
     testLabel += typeLabel;
-    check_fill_results<PixelType>(dst_buffer.mem,
-                                  scalars.inWidth, scalars.inHeight, scalars.inPitch,
-                                  scalars.inColor,
-                                  testLabel.c_str());
+    check_results<PixelType>(dst_buffer.mem,
+                             scalars.inWidth, scalars.inHeight, scalars.inPitch,
+                             scalars.inColor,
+                             testLabel.c_str());
 
     dst_buffer.reset();
 }
 
 /* ============================================================================================== */
 
-template <typename SrcPixelType, typename DstPixelType>
-void check_copytofromimage_results(const device_memory& src,
-                                   const device_memory& dst,
-                                   int                  width,
-                                   int                  height,
-                                   int                  pitch,
-                                   const char*          label,
-                                   bool                 logIncorrect = false,
-                                   bool                 logCorrect = false) {
-    unsigned int num_correct_pixels = 0;
-    unsigned int num_incorrect_pixels = 0;
-
-    memory_map src_map(src);
-    memory_map dst_map(dst);
-    auto src_pixels = static_cast<const SrcPixelType*>(src_map.data);
-    auto dst_pixels = static_cast<const DstPixelType*>(dst_map.data);
-
-    {
-        auto src_row = src_pixels;
-        auto dst_row = dst_pixels;
-        for (int r = 0; r < height; ++r, src_row += pitch, dst_row += pitch) {
-            auto src_p = src_row;
-            auto dst_p = dst_row;
-            for (int c = 0; c < width; ++c, ++src_p, ++dst_p) {
-                const float4 src_pixel = pixel_traits<float4>::translate(*src_p);
-                const float4 dst_pixel = pixel_traits<float4>::translate(*dst_p);
-                const bool pixel_is_correct = (dst_pixel == src_pixel);
-                if (pixel_is_correct) {
-                    ++num_correct_pixels;
-                    if (logCorrect) {
-                        LOGE("%s:  CORRECT pixels{row:%d, col%d}", label, r, c);
-                    }
-                }
-                else {
-                    ++num_incorrect_pixels;
-                    if (logIncorrect) {
-                        LOGE("%s: INCORRECT pixels{row:%d, col%d} expected{x=%f, y=%f, z=%f, w=%f} observed{x=%f, y=%f, z=%f, w=%f}",
-                             label, r, c,
-                             src_pixel.x, src_pixel.y, src_pixel.z, src_pixel.w,
-                             dst_pixel.x, dst_pixel.y, dst_pixel.z, dst_pixel.w);
-                    }
-                }
-            }
-        }
-    }
-
-    LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels, num_incorrect_pixels);
-}
-
 template <typename BufferPixelType, typename ImagePixelType>
 void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkSampler>& samplers) {
-    typedef BufferPixelType buffer_pixel_t;
-    typedef ImagePixelType image_pixel_t;
-
     std::string typeLabel = pixel_traits<BufferPixelType>::type_name;
     typeLabel += '-';
     typeLabel += pixel_traits<ImagePixelType>::type_name;
@@ -1627,8 +1653,8 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
     const to_image_scalar_args to_image_scalars = {
             0,              // inSrcOffset
             buffer_width,   // inSrcPitch
-            pixel_traits<buffer_pixel_t>::cl_pixel_order,   // inSrcChannelOrder
-            pixel_traits<buffer_pixel_t>::cl_pixel_type,    // inSrcChannelType
+            pixel_traits<BufferPixelType>::cl_pixel_order,   // inSrcChannelOrder
+            pixel_traits<BufferPixelType>::cl_pixel_type,    // inSrcChannelType
             0,              // inSwapComponents
             0,              // inPremultiply
             buffer_width,   // inWidth
@@ -1638,32 +1664,32 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
     const from_image_scalar_args from_image_scalars = {
             0,              // inDestOffset
             buffer_width,   // inDestPitch
-            pixel_traits<buffer_pixel_t>::cl_pixel_order,   // inDestChannelOrder
-            pixel_traits<buffer_pixel_t>::cl_pixel_type,    // inDestChannelType
+            pixel_traits<BufferPixelType>::cl_pixel_order,   // inDestChannelOrder
+            pixel_traits<BufferPixelType>::cl_pixel_type,    // inDestChannelType
             0,              // inSwapComponents
             buffer_width,   // inWidth
             buffer_height   // inHeight
     };
 
-    const std::size_t buffer_size = buffer_width * buffer_height * sizeof(buffer_pixel_t);
+    const std::size_t buffer_size = buffer_width * buffer_height * sizeof(BufferPixelType);
 
     // allocate buffers and images
     buffer  src_buffer(info, buffer_size);
     buffer  dst_buffer(info, buffer_size);
-    image   dstImage(info, buffer_width, buffer_height, pixel_traits<image_pixel_t>::vk_pixel_type);
+    image   dstImage(info, buffer_width, buffer_height, pixel_traits<ImagePixelType>::vk_pixel_type);
 
     // initialize source and destination buffers
     {
-        const buffer_pixel_t src_value = pixel_traits<buffer_pixel_t>::translate((float4){ 0.2f, 0.4f, 0.8f, 1.0f });
+        const BufferPixelType src_value = pixel_traits<BufferPixelType>::translate((float4){ 0.2f, 0.4f, 0.8f, 1.0f });
         memory_map src_map(src_buffer);
-        auto src_data = static_cast<buffer_pixel_t*>(src_map.data);
+        auto src_data = static_cast<BufferPixelType*>(src_map.data);
         std::fill(src_data, src_data + (buffer_width * buffer_height), src_value);
     }
 
     {
-        const buffer_pixel_t dst_value = pixel_traits<buffer_pixel_t>::translate((float4){ 0.1f, 0.3f, 0.5f, 0.7f });
+        const BufferPixelType dst_value = pixel_traits<BufferPixelType>::translate((float4){ 0.1f, 0.3f, 0.5f, 0.7f });
         memory_map dst_map(dst_buffer);
-        auto dst_data = static_cast<buffer_pixel_t*>(dst_map.data);
+        auto dst_data = static_cast<BufferPixelType*>(dst_map.data);
         std::fill(dst_data, dst_data + (buffer_width * buffer_height), dst_value);
     }
 
@@ -1688,7 +1714,7 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
 
     std::string testLabel = "memory.spv/CopyBufferToImageKernel/";
     testLabel += typeLabel;
-    check_copytofromimage_results<buffer_pixel_t, image_pixel_t>(
+    check_results<BufferPixelType, ImagePixelType>(
             src_buffer.mem, dstImage.mem,
             buffer_width, buffer_height, buffer_height,
             testLabel.c_str());
@@ -1711,7 +1737,7 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
 
     testLabel = "memory.spv/CopyImageToBufferKernel/";
     testLabel += typeLabel;
-    check_copytofromimage_results<buffer_pixel_t, buffer_pixel_t>(
+    check_results<BufferPixelType, BufferPixelType>(
             src_buffer.mem, dst_buffer.mem,
             buffer_width, buffer_height, buffer_height,
             testLabel.c_str());
