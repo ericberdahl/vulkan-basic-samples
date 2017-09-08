@@ -2113,18 +2113,26 @@ int sample_main(int argc, char *argv[]) {
                    std::bind(create_compatible_sampler, info.device, std::placeholders::_1));
 
     unsigned int num_successes = 0;
-    const unsigned num_tests = 9;
+    const unsigned num_tests = 16;
 
     num_successes += test_fill_kernel<float4>(info, samplers);
     num_successes += test_fill_kernel<half4>(info, samplers);
 
-    num_successes += test_copytofromimage_kernels<unsigned char,float4>(info, samplers);
+    num_successes += test_copytofromimage_kernels<uchar,float4>(info, samplers);
     num_successes += test_copytofromimage_kernels<uchar4,float4>(info, samplers);
     num_successes += test_copytofromimage_kernels<half,float4>(info, samplers);
     num_successes += test_copytofromimage_kernels<half4,float4>(info, samplers);
     num_successes += test_copytofromimage_kernels<float,float4>(info, samplers);
     num_successes += test_copytofromimage_kernels<float2,float4>(info, samplers);
     num_successes += test_copytofromimage_kernels<float4,float4>(info, samplers);
+
+    num_successes += test_copytofromimage_kernels<uchar,half4>(info, samplers);
+    num_successes += test_copytofromimage_kernels<uchar4,half4>(info, samplers);
+    num_successes += test_copytofromimage_kernels<half,half4>(info, samplers);
+    num_successes += test_copytofromimage_kernels<half4,half4>(info, samplers);
+    num_successes += test_copytofromimage_kernels<float,half4>(info, samplers);
+    num_successes += test_copytofromimage_kernels<float2,half4>(info, samplers);
+    num_successes += test_copytofromimage_kernels<float4,half4>(info, samplers);
 
     const int num_failures = num_tests - num_successes;
 
