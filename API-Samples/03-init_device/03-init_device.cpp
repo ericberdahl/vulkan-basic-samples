@@ -395,6 +395,8 @@ struct pixel_traits {};
 
 template <>
 struct pixel_traits<float> {
+    typedef float   component_t;
+
     static const int cl_pixel_order = CL_R;
     static const int cl_pixel_type = CL_FLOAT;
     static constexpr const char* const type_name = "float";
@@ -409,8 +411,10 @@ struct pixel_traits<float> {
 
 template <>
 struct pixel_traits<float2> {
+    typedef float   component_t;
+
     static const int cl_pixel_order = CL_RG;
-    static const int cl_pixel_type = pixel_traits<float>::cl_pixel_type;
+    static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static constexpr const char* const type_name = "float2";
     static const VkFormat vk_pixel_type = VK_FORMAT_R32G32_SFLOAT;
 
@@ -423,9 +427,11 @@ struct pixel_traits<float2> {
 
 template <>
 struct pixel_traits<float4> {
+    typedef float   component_t;
+
     static const int device_pixel_format = 1; // kDevicePixelFormat_BGRA_4444_32f
     static const int cl_pixel_order = CL_RGBA;
-    static const int cl_pixel_type = pixel_traits<float>::cl_pixel_type;
+    static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static constexpr const char* const type_name = "float4";
     static const VkFormat vk_pixel_type = VK_FORMAT_R32G32B32A32_SFLOAT;
 
@@ -472,6 +478,8 @@ struct pixel_traits<float4> {
 
 template <>
 struct pixel_traits<half> {
+    typedef half    component_t;
+
     static const int cl_pixel_order = CL_R;
     static const int cl_pixel_type = CL_HALF_FLOAT;
     static constexpr const char* const type_name = "half";
@@ -488,8 +496,10 @@ struct pixel_traits<half> {
 
 template <>
 struct pixel_traits<half2> {
+    typedef half    component_t;
+
     static const int cl_pixel_order = CL_RG;
-    static const int cl_pixel_type = pixel_traits<half>::cl_pixel_type;
+    static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static constexpr const char* const type_name = "half2";
     static const VkFormat vk_pixel_type = VK_FORMAT_R16G16_SFLOAT;
 
@@ -505,9 +515,11 @@ struct pixel_traits<half2> {
 
 template <>
 struct pixel_traits<half4> {
+    typedef half    component_t;
+
     static const int device_pixel_format = 0; // kDevicePixelFormat_BGRA_4444_16f
     static const int cl_pixel_order = CL_RGBA;
-    static const int cl_pixel_type = pixel_traits<half>::cl_pixel_type;
+    static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static constexpr const char* const type_name = "half4";
     static const VkFormat vk_pixel_type = VK_FORMAT_R16G16B16A16_SFLOAT;
 
@@ -525,6 +537,8 @@ struct pixel_traits<half4> {
 
 template <>
 struct pixel_traits<ushort> {
+    typedef ushort    component_t;
+
     static const int cl_pixel_order = CL_R;
     static const int cl_pixel_type = CL_UNSIGNED_INT16;
     static constexpr const char* const type_name = "ushort";
@@ -539,8 +553,10 @@ struct pixel_traits<ushort> {
 
 template <>
 struct pixel_traits<ushort2> {
+    typedef ushort    component_t;
+
     static const int cl_pixel_order = CL_RG;
-    static const int cl_pixel_type = pixel_traits<ushort>::cl_pixel_type;
+    static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static constexpr const char* const type_name = "ushort2";
     static const VkFormat vk_pixel_type = VK_FORMAT_R16G16_UINT;
 
@@ -556,8 +572,10 @@ struct pixel_traits<ushort2> {
 
 template <>
 struct pixel_traits<ushort4> {
+    typedef ushort    component_t;
+
     static const int cl_pixel_order = CL_RGBA;
-    static const int cl_pixel_type = pixel_traits<ushort>::cl_pixel_type;
+    static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static constexpr const char* const type_name = "ushort4";
     static const VkFormat vk_pixel_type = VK_FORMAT_R16G16B16A16_UINT;
 
@@ -575,6 +593,8 @@ struct pixel_traits<ushort4> {
 
 template <>
 struct pixel_traits<uchar> {
+    typedef uchar    component_t;
+
     static const int cl_pixel_order = CL_R;
     static const int cl_pixel_type = CL_UNORM_INT8;
     static constexpr const char* const type_name = "uchar";
@@ -589,8 +609,10 @@ struct pixel_traits<uchar> {
 
 template <>
 struct pixel_traits<uchar2> {
+    typedef uchar    component_t;
+
     static const int cl_pixel_order = CL_RG;
-    static const int cl_pixel_type = pixel_traits<uchar>::cl_pixel_type;
+    static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static constexpr const char* const type_name = "uchar2";
     static const VkFormat vk_pixel_type = VK_FORMAT_R8G8_UNORM;
 
@@ -606,8 +628,10 @@ struct pixel_traits<uchar2> {
 
 template <>
 struct pixel_traits<uchar4> {
+    typedef uchar    component_t;
+
     static const int cl_pixel_order = CL_RGBA;
-    static const int cl_pixel_type = pixel_traits<uchar>::cl_pixel_type;
+    static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static constexpr const char* const type_name = "uchar4";
     static const VkFormat vk_pixel_type = VK_FORMAT_R8G8B8A8_UNORM;
 
