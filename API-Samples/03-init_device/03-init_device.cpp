@@ -1509,6 +1509,177 @@ void kernel_invocation::run(VkQueue                     queue,
 
 /* ============================================================================================== */
 
+void run_fill_kernel(struct sample_info&            info,
+                     const std::vector<VkSampler>&  samplers,
+                     VkBuffer                       dst_buffer,
+                     int                            pitch,
+                     int                            device_format,
+                     int                            offset_x,
+                     int                            offset_y,
+                     int                            width,
+                     int                            height,
+                     const float4&                  color) {
+    struct scalar_args {
+        int     inPitch;        // offset 0
+        int     inDeviceFormat; // DevicePixelFormat offset 4
+        int     inOffsetX;      // offset 8
+        int     inOffsetY;      // offset 12
+        int     inWidth;        // offset 16
+        int     inHeight;       // offset 20
+        float4  inColor;        // offset 32
+    };
+    static_assert(0 == offsetof(scalar_args, inPitch), "inPitch offset incorrect");
+    static_assert(4 == offsetof(scalar_args, inDeviceFormat), "inDeviceFormat offset incorrect");
+    static_assert(8 == offsetof(scalar_args, inOffsetX), "inOffsetX offset incorrect");
+    static_assert(12 == offsetof(scalar_args, inOffsetY), "inOffsetY offset incorrect");
+    static_assert(16 == offsetof(scalar_args, inWidth), "inWidth offset incorrect");
+    static_assert(20 == offsetof(scalar_args, inHeight), "inHeight offset incorrect");
+    static_assert(32 == offsetof(scalar_args, inColor), "inColor offset incorrect");
+
+    const scalar_args scalars = {
+            pitch,
+            device_format,
+            offset_x,
+            offset_y,
+            width,
+            height,
+            color
+    };
+
+    const auto workgroup_sizes = std::make_tuple(32, 32);
+    const auto num_workgroups = std::make_tuple((scalars.inWidth + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
+                                                (scalars.inHeight + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
+
+    kernel_invocation invocation(info.device,
+                                 info.cmd_pool,
+                                 info.desc_pool,
+                                 info.memory_properties,
+                                 "fills.spv", "FillWithColorKernel",
+                                 "fills.spvmap", "FillWithColorKernel");
+    invocation.addLiteralSamplers(samplers.begin(), samplers.end());
+    invocation.addBufferArgument(dst_buffer);
+    invocation.addPodArgument(scalars);
+    invocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
+}
+
+void run_copybuffertoimage_kernel(struct sample_info& info,
+                                  const std::vector<VkSampler>& samplers,
+                                  VkBuffer  src_buffer,
+                                  VkImageView   dst_image,
+                                  int src_offset,
+                                  int src_pitch,
+                                  int src_channel_order,
+                                  int src_channel_type,
+                                  bool swap_components,
+                                  bool premultiply,
+                                  int width,
+                                  int height) {
+    struct scalar_args {
+        int inSrcOffset;        // offset 0
+        int inSrcPitch;         // offset 4
+        int inSrcChannelOrder;  // offset 8 -- cl_channel_order
+        int inSrcChannelType;   // offset 12 -- cl_channel_type
+        int inSwapComponents;   // offset 16 -- bool
+        int inPremultiply;      // offset 20 -- bool
+        int inWidth;            // offset 24
+        int inHeight;           // offset 28
+    };
+    static_assert(0 == offsetof(scalar_args, inSrcOffset), "inSrcOffset offset incorrect");
+    static_assert(4 == offsetof(scalar_args, inSrcPitch), "inSrcPitch offset incorrect");
+    static_assert(8 == offsetof(scalar_args, inSrcChannelOrder), "inSrcChannelOrder offset incorrect");
+    static_assert(12 == offsetof(scalar_args, inSrcChannelType), "inSrcChannelType offset incorrect");
+    static_assert(16 == offsetof(scalar_args, inSwapComponents), "inSwapComponents offset incorrect");
+    static_assert(20 == offsetof(scalar_args, inPremultiply), "inPremultiply offset incorrect");
+    static_assert(24 == offsetof(scalar_args, inWidth), "inWidth offset incorrect");
+    static_assert(28 == offsetof(scalar_args, inHeight), "inHeight offset incorrect");
+
+    const scalar_args scalars = {
+            src_offset,
+            src_pitch,
+            src_channel_order,
+            src_channel_type,
+            (swap_components ? 1 : 0),
+            (premultiply ? 1 : 0),
+            width,
+            height
+    };
+
+    const auto workgroup_sizes = std::make_tuple(32, 32);
+    const auto num_workgroups = std::make_tuple((width + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
+                                                (height + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
+    kernel_invocation invocation(info.device,
+                                            info.cmd_pool,
+                                            info.desc_pool,
+                                            info.memory_properties,
+                                            "memory.spv", "CopyBufferToImageKernel",
+                                            "memory.spvmap", "CopyBufferToImageKernel");
+
+    invocation.addLiteralSamplers(samplers.begin(), samplers.end());
+    invocation.addBufferArgument(src_buffer);
+    invocation.addWriteOnlyImageArgument(dst_image);
+    invocation.addPodArgument(scalars);
+
+    invocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
+}
+
+void run_copyimagetobuffer_kernel(struct sample_info& info,
+                                  const std::vector<VkSampler>& samplers,
+                                  VkImageView src_image,
+                                  VkBuffer dst_buffer,
+                                  int dst_offset,
+                                  int dst_pitch,
+                                  int dst_channel_order,
+                                  int dst_channel_type,
+                                  bool swap_components,
+                                  int width,
+                                  int height) {
+    struct scalar_args {
+        int inDestOffset;       // offset 0
+        int inDestPitch;        // offset 4
+        int inDestChannelOrder; // offset 8 -- cl_channel_order
+        int inDestChannelType;  // offset 12 -- cl_channel_type
+        int inSwapComponents;   // offset 16 -- bool
+        int inWidth;            // offset 20
+        int inHeight;           // offset 24
+    };
+    static_assert(0 == offsetof(scalar_args, inDestOffset), "inDestOffset offset incorrect");
+    static_assert(4 == offsetof(scalar_args, inDestPitch), "inDestPitch offset incorrect");
+    static_assert(8 == offsetof(scalar_args, inDestChannelOrder), "inDestChannelOrder offset incorrect");
+    static_assert(12 == offsetof(scalar_args, inDestChannelType), "inDestChannelType offset incorrect");
+    static_assert(16 == offsetof(scalar_args, inSwapComponents), "inSwapComponents offset incorrect");
+    static_assert(20 == offsetof(scalar_args, inWidth), "inWidth offset incorrect");
+    static_assert(24 == offsetof(scalar_args, inHeight), "inHeight offset incorrect");
+
+    const scalar_args scalars = {
+            dst_offset,
+            width,
+            dst_channel_order,
+            dst_channel_type,
+            (swap_components ? 1 : 0),
+            width,
+            height
+    };
+
+    const auto workgroup_sizes = std::make_tuple(32, 32);
+    const auto num_workgroups = std::make_tuple((width + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
+                                                (height + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
+
+    kernel_invocation invocation(info.device,
+                                 info.cmd_pool,
+                                 info.desc_pool,
+                                 info.memory_properties,
+                                 "memory.spv", "CopyImageToBufferKernel",
+                                 "memory.spvmap", "CopyImageToBufferKernel");
+
+    invocation.addLiteralSamplers(samplers.begin(), samplers.end());
+    invocation.addReadOnlyImageArgument(src_image);
+    invocation.addBufferArgument(dst_buffer);
+    invocation.addPodArgument(scalars);
+
+    invocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
+}
+
+/* ============================================================================================== */
 
 template <typename ExpectedPixelType, typename ObservedPixelType>
 bool check_result(ExpectedPixelType expected_pixel,
@@ -1631,46 +1802,16 @@ void check_results(const device_memory& observed,
 /* ============================================================================================== */
 
 template <typename PixelType>
-void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& samplers) {
+void test_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& samplers) {
     const std::string typeLabel = pixel_traits<PixelType>::type_name;
 
     const int buffer_height = 64;
     const int buffer_width = 64;
-
-    struct scalar_args {
-        int     inPitch;        // offset 0
-        int     inDeviceFormat; // DevicePixelFormat offset 4
-        int     inOffsetX;      // offset 8
-        int     inOffsetY;      // offset 12
-        int     inWidth;        // offset 16
-        int     inHeight;       // offset 20
-        float4  inColor;        // offset 32
-    };
-    static_assert(0 == offsetof(scalar_args, inPitch), "inPitch offset incorrect");
-    static_assert(4 == offsetof(scalar_args, inDeviceFormat), "inDeviceFormat offset incorrect");
-    static_assert(8 == offsetof(scalar_args, inOffsetX), "inOffsetX offset incorrect");
-    static_assert(12 == offsetof(scalar_args, inOffsetY), "inOffsetY offset incorrect");
-    static_assert(16 == offsetof(scalar_args, inWidth), "inWidth offset incorrect");
-    static_assert(20 == offsetof(scalar_args, inHeight), "inHeight offset incorrect");
-    static_assert(32 == offsetof(scalar_args, inColor), "inColor offset incorrect");
-
-    const scalar_args scalars = {
-            buffer_width,               // inPitch
-            pixel_traits<PixelType>::device_pixel_format,   // inDeviceFormat
-            0,                          // inOffsetX
-            0,                          // inOffsetY
-            buffer_width,               // inWidth
-            buffer_height,              // inHeight
-            { 0.25f, 0.50f, 0.75f, 1.0f }  // inColor
-    };
+    const float4 color = { 0.25f, 0.50f, 0.75f, 1.0f };
 
     // allocate image buffer
-    const std::size_t buffer_size = scalars.inPitch * scalars.inHeight * sizeof(PixelType);
+    const std::size_t buffer_size = buffer_width * buffer_height * sizeof(PixelType);
     buffer dst_buffer(info, buffer_size);
-
-    const auto workgroup_sizes = std::make_tuple(32, 32);
-    const auto num_workgroups = std::make_tuple((scalars.inWidth + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
-                                                (scalars.inHeight + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
 
     {
         const PixelType src_value = pixel_traits<PixelType>::translate((float4){ 0.0f, 0.0f, 0.0f, 0.0f });
@@ -1679,24 +1820,21 @@ void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sam
         auto dst_data = static_cast<PixelType*>(dst_map.data);
         std::fill(dst_data, dst_data + (buffer_width * buffer_height), src_value);
     }
-    {
-        kernel_invocation fillInvocation(info.device,
-                                         info.cmd_pool,
-                                         info.desc_pool,
-                                         info.memory_properties,
-                                         "fills.spv", "FillWithColorKernel",
-                                         "fills.spvmap", "FillWithColorKernel");
-        fillInvocation.addLiteralSamplers(samplers.begin(), samplers.end());
-        fillInvocation.addBufferArgument(dst_buffer.buf);
-        fillInvocation.addPodArgument(scalars);
-        fillInvocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
-    }
+
+    run_fill_kernel(info,
+                    samplers,
+                    dst_buffer.buf, // dst_buffer
+                    buffer_width,   // pitch
+                    pixel_traits<PixelType>::device_pixel_format, // device_format
+                    0, 0, // offset_x, offset_y
+                    buffer_width, buffer_height, // width, height
+                    color); // color
 
     std::string testLabel = "fills.spv/FillWithColorKernel/";
     testLabel += typeLabel;
     check_results<PixelType>(dst_buffer.mem,
-                             scalars.inWidth, scalars.inHeight, scalars.inPitch,
-                             scalars.inColor,
+                             buffer_width, buffer_height, buffer_width,
+                             color,
                              testLabel.c_str());
 
     dst_buffer.reset();
@@ -1705,70 +1843,13 @@ void run_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sam
 /* ============================================================================================== */
 
 template <typename BufferPixelType, typename ImagePixelType>
-void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkSampler>& samplers) {
+void test_copytofromimage_kernels(struct sample_info& info, const std::vector<VkSampler>& samplers) {
     std::string typeLabel = pixel_traits<BufferPixelType>::type_name;
     typeLabel += '-';
     typeLabel += pixel_traits<ImagePixelType>::type_name;
 
     const int buffer_height = 64;
     const int buffer_width = 64;
-
-    struct to_image_scalar_args {
-        int inSrcOffset;        // offset 0
-        int inSrcPitch;         // offset 4
-        int inSrcChannelOrder;  // offset 8 -- cl_channel_order
-        int inSrcChannelType;   // offset 12 -- cl_channel_type
-        int inSwapComponents;   // offset 16 -- bool
-        int inPremultiply;      // offset 20 -- bool
-        int inWidth;            // offset 24
-        int inHeight;           // offset 28
-    };
-    static_assert(0 == offsetof(to_image_scalar_args, inSrcOffset), "inSrcOffset offset incorrect");
-    static_assert(4 == offsetof(to_image_scalar_args, inSrcPitch), "inSrcPitch offset incorrect");
-    static_assert(8 == offsetof(to_image_scalar_args, inSrcChannelOrder), "inSrcChannelOrder offset incorrect");
-    static_assert(12 == offsetof(to_image_scalar_args, inSrcChannelType), "inSrcChannelType offset incorrect");
-    static_assert(16 == offsetof(to_image_scalar_args, inSwapComponents), "inSwapComponents offset incorrect");
-    static_assert(20 == offsetof(to_image_scalar_args, inPremultiply), "inPremultiply offset incorrect");
-    static_assert(24 == offsetof(to_image_scalar_args, inWidth), "inWidth offset incorrect");
-    static_assert(28 == offsetof(to_image_scalar_args, inHeight), "inHeight offset incorrect");
-
-    struct from_image_scalar_args {
-        int inDestOffset;       // offset 0
-        int inDestPitch;        // offset 4
-        int inDestChannelOrder; // offset 8 -- cl_channel_order
-        int inDestChannelType;  // offset 12 -- cl_channel_type
-        int inSwapComponents;   // offset 16 -- bool
-        int inWidth;            // offset 20
-        int inHeight;           // offset 24
-    };
-    static_assert(0 == offsetof(from_image_scalar_args, inDestOffset), "inDestOffset offset incorrect");
-    static_assert(4 == offsetof(from_image_scalar_args, inDestPitch), "inDestPitch offset incorrect");
-    static_assert(8 == offsetof(from_image_scalar_args, inDestChannelOrder), "inDestChannelOrder offset incorrect");
-    static_assert(12 == offsetof(from_image_scalar_args, inDestChannelType), "inDestChannelType offset incorrect");
-    static_assert(16 == offsetof(from_image_scalar_args, inSwapComponents), "inSwapComponents offset incorrect");
-    static_assert(20 == offsetof(from_image_scalar_args, inWidth), "inWidth offset incorrect");
-    static_assert(24 == offsetof(from_image_scalar_args, inHeight), "inHeight offset incorrect");
-
-    const to_image_scalar_args to_image_scalars = {
-            0,              // inSrcOffset
-            buffer_width,   // inSrcPitch
-            pixel_traits<BufferPixelType>::cl_pixel_order,   // inSrcChannelOrder
-            pixel_traits<BufferPixelType>::cl_pixel_type,    // inSrcChannelType
-            0,              // inSwapComponents
-            0,              // inPremultiply
-            buffer_width,   // inWidth
-            buffer_height   // inHeight
-    };
-
-    const from_image_scalar_args from_image_scalars = {
-            0,              // inDestOffset
-            buffer_width,   // inDestPitch
-            pixel_traits<BufferPixelType>::cl_pixel_order,   // inDestChannelOrder
-            pixel_traits<BufferPixelType>::cl_pixel_type,    // inDestChannelType
-            0,              // inSwapComponents
-            buffer_width,   // inWidth
-            buffer_height   // inHeight
-    };
 
     const std::size_t buffer_size = buffer_width * buffer_height * sizeof(BufferPixelType);
 
@@ -1792,24 +1873,18 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
         std::fill(dst_data, dst_data + (buffer_width * buffer_height), dst_value);
     }
 
-    const auto workgroup_sizes = std::make_tuple(32, 32);
-    const auto num_workgroups = std::make_tuple((buffer_width + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
-                                                (buffer_height + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
-    {
-        kernel_invocation copyToImageInvocation(info.device,
-                                                info.cmd_pool,
-                                                info.desc_pool,
-                                                info.memory_properties,
-                                                "memory.spv", "CopyBufferToImageKernel",
-                                                "memory.spvmap", "CopyBufferToImageKernel");
-
-        copyToImageInvocation.addLiteralSamplers(samplers.begin(), samplers.end());
-        copyToImageInvocation.addBufferArgument(src_buffer.buf);
-        copyToImageInvocation.addWriteOnlyImageArgument(dstImage.view);
-        copyToImageInvocation.addPodArgument(to_image_scalars);
-
-        copyToImageInvocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
-    }
+    run_copybuffertoimage_kernel(info,
+                                 samplers,
+                                 src_buffer.buf,
+                                 dstImage.view,
+                                 0,
+                                 buffer_width,
+                                 pixel_traits<BufferPixelType>::cl_pixel_order,
+                                 pixel_traits<BufferPixelType>::cl_pixel_type,
+                                 false,
+                                 false,
+                                 buffer_width,
+                                 buffer_height);
 
     std::string testLabel = "memory.spv/CopyBufferToImageKernel/";
     testLabel += typeLabel;
@@ -1818,21 +1893,17 @@ void run_copytofromimage_kernels(struct sample_info& info, const std::vector<VkS
             buffer_width, buffer_height, buffer_height,
             testLabel.c_str());
 
-    {
-        kernel_invocation copyFromImageInvocation(info.device,
-                                                  info.cmd_pool,
-                                                  info.desc_pool,
-                                                  info.memory_properties,
-                                                  "memory.spv", "CopyImageToBufferKernel",
-                                                  "memory.spvmap", "CopyImageToBufferKernel");
-
-        copyFromImageInvocation.addLiteralSamplers(samplers.begin(), samplers.end());
-        copyFromImageInvocation.addReadOnlyImageArgument(dstImage.view);
-        copyFromImageInvocation.addBufferArgument(dst_buffer.buf);
-        copyFromImageInvocation.addPodArgument(from_image_scalars);
-
-        copyFromImageInvocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
-    }
+    run_copyimagetobuffer_kernel(info,
+                                 samplers,
+                                 dstImage.view,
+                                 dst_buffer.buf,
+                                 0,
+                                 buffer_width,
+                                 pixel_traits<BufferPixelType>::cl_pixel_order,
+                                 pixel_traits<BufferPixelType>::cl_pixel_type,
+                                 false,
+                                 buffer_width,
+                                 buffer_height);
 
     testLabel = "memory.spv/CopyImageToBufferKernel/";
     testLabel += typeLabel;
@@ -1883,16 +1954,16 @@ int sample_main(int argc, char *argv[]) {
                    std::back_inserter(samplers),
                    std::bind(create_compatible_sampler, info.device, std::placeholders::_1));
 
-    run_fill_kernel<float4>(info, samplers);
-    run_fill_kernel<half4>(info, samplers);
+    test_fill_kernel<float4>(info, samplers);
+    test_fill_kernel<half4>(info, samplers);
 
-    run_copytofromimage_kernels<unsigned char,float4>(info, samplers);
-    run_copytofromimage_kernels<uchar4,float4>(info, samplers);
-    run_copytofromimage_kernels<half,float4>(info, samplers);
-    run_copytofromimage_kernels<half4,float4>(info, samplers);
-    run_copytofromimage_kernels<float,float4>(info, samplers);
-    run_copytofromimage_kernels<float2,float4>(info, samplers);
-    run_copytofromimage_kernels<float4,float4>(info, samplers);
+    test_copytofromimage_kernels<unsigned char,float4>(info, samplers);
+    test_copytofromimage_kernels<uchar4,float4>(info, samplers);
+    test_copytofromimage_kernels<half,float4>(info, samplers);
+    test_copytofromimage_kernels<half4,float4>(info, samplers);
+    test_copytofromimage_kernels<float,float4>(info, samplers);
+    test_copytofromimage_kernels<float2,float4>(info, samplers);
+    test_copytofromimage_kernels<float4,float4>(info, samplers);
 
     //
     // Clean up
