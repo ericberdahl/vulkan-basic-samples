@@ -1942,7 +1942,10 @@ bool check_results(const device_memory& observed,
 /* ============================================================================================== */
 
 template <typename PixelType>
-bool test_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& samplers) {
+bool test_fill_kernel(struct sample_info&           info,
+                      const std::vector<VkSampler>& samplers,
+                      bool                          logIncorrect = false,
+                      bool                          logCorrect = false) {
     const std::string typeLabel = pixel_traits<PixelType>::type_name;
 
     const int buffer_height = 64;
@@ -1976,7 +1979,9 @@ bool test_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sa
                                                  buffer_width, buffer_height,
                                                  buffer_width,
                                                  color,
-                                                 testLabel.c_str());
+                                                 testLabel.c_str(),
+                                                 logIncorrect,
+                                                 logCorrect);
 
     dst_buffer.reset();
 
@@ -1986,7 +1991,10 @@ bool test_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sa
 /* ============================================================================================== */
 
 template <typename BufferPixelType, typename ImagePixelType>
-bool test_copytofromimage_kernels(struct sample_info& info, const std::vector<VkSampler>& samplers) {
+bool test_copytofromimage_kernels(struct sample_info&           info,
+                                  const std::vector<VkSampler>& samplers,
+                                  bool                          logIncorrect = false,
+                                  bool                          logCorrect = false) {
     std::string typeLabel = pixel_traits<BufferPixelType>::type_name;
     typeLabel += '-';
     typeLabel += pixel_traits<ImagePixelType>::type_name;
@@ -2034,7 +2042,9 @@ bool test_copytofromimage_kernels(struct sample_info& info, const std::vector<Vk
     bool result = check_results<BufferPixelType, ImagePixelType>(src_buffer.mem, dstImage.mem,
                                                                  buffer_width, buffer_height,
                                                                  buffer_height,
-                                                                 testLabel.c_str());
+                                                                 testLabel.c_str(),
+                                                                 logIncorrect,
+                                                                 logCorrect);
 
     run_copyimagetobuffer_kernel(info,
                                  samplers,
@@ -2053,7 +2063,9 @@ bool test_copytofromimage_kernels(struct sample_info& info, const std::vector<Vk
     result = check_results<BufferPixelType, BufferPixelType>(src_buffer.mem, dst_buffer.mem,
                                                              buffer_width, buffer_height,
                                                              buffer_height,
-                                                             testLabel.c_str())
+                                                             testLabel.c_str(),
+                                                             logIncorrect,
+                                                             logCorrect)
              && result;
 
     dstImage.reset();
