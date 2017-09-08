@@ -1711,7 +1711,7 @@ bool check_result(ExpectedPixelType expected_pixel,
 }
 
 template <typename ObservedPixelType, typename ExpectedPixelType>
-void check_results(const ObservedPixelType* observed_pixels,
+bool check_results(const ObservedPixelType* observed_pixels,
                    int                      width,
                    int                      height,
                    int                      pitch,
@@ -1736,10 +1736,12 @@ void check_results(const ObservedPixelType* observed_pixels,
     }
 
     LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels, num_incorrect_pixels);
+
+    return (0 == num_incorrect_pixels && 0 < num_correct_pixels);
 }
 
 template <typename ExpectedPixelType, typename ObservedPixelType>
-void check_results(const ExpectedPixelType* expected_pixels,
+bool check_results(const ExpectedPixelType* expected_pixels,
                    const ObservedPixelType* observed_pixels,
                    int                      width,
                    int                      height,
@@ -1766,10 +1768,12 @@ void check_results(const ExpectedPixelType* expected_pixels,
     }
 
     LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels, num_incorrect_pixels);
+
+    return (0 == num_incorrect_pixels && 0 < num_correct_pixels);
 }
 
 template <typename ExpectedPixelType, typename ObservedPixelType>
-void check_results(const device_memory& expected,
+bool check_results(const device_memory& expected,
                    const device_memory& observed,
                    int                  width,
                    int                  height,
@@ -1782,11 +1786,11 @@ void check_results(const device_memory& expected,
     auto src_pixels = static_cast<const ExpectedPixelType*>(src_map.data);
     auto dst_pixels = static_cast<const ObservedPixelType*>(dst_map.data);
 
-    check_results(src_pixels, dst_pixels, width, height, pitch, label, logIncorrect, logCorrect);
+    return check_results(src_pixels, dst_pixels, width, height, pitch, label, logIncorrect, logCorrect);
 }
 
 template <typename ObservedPixelType>
-void check_results(const device_memory& observed,
+bool check_results(const device_memory& observed,
                    int                  width,
                    int                  height,
                    int                  pitch,
@@ -1796,13 +1800,13 @@ void check_results(const device_memory& observed,
                    bool                 logCorrect = false) {
     memory_map map(observed);
     auto pixels = static_cast<const ObservedPixelType*>(map.data);
-    check_results(pixels, width, height, pitch, expected, label, logIncorrect, logCorrect);
+    return check_results(pixels, width, height, pitch, expected, label, logIncorrect, logCorrect);
 }
 
 /* ============================================================================================== */
 
 template <typename PixelType>
-void test_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& samplers) {
+bool test_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& samplers) {
     const std::string typeLabel = pixel_traits<PixelType>::type_name;
 
     const int buffer_height = 64;
@@ -1832,18 +1836,21 @@ void test_fill_kernel(struct sample_info& info, const std::vector<VkSampler>& sa
 
     std::string testLabel = "fills.spv/FillWithColorKernel/";
     testLabel += typeLabel;
-    check_results<PixelType>(dst_buffer.mem,
-                             buffer_width, buffer_height, buffer_width,
-                             color,
-                             testLabel.c_str());
+    const bool result = check_results<PixelType>(dst_buffer.mem,
+                                                 buffer_width, buffer_height,
+                                                 buffer_width,
+                                                 color,
+                                                 testLabel.c_str());
 
     dst_buffer.reset();
+
+    return result;
 }
 
 /* ============================================================================================== */
 
 template <typename BufferPixelType, typename ImagePixelType>
-void test_copytofromimage_kernels(struct sample_info& info, const std::vector<VkSampler>& samplers) {
+bool test_copytofromimage_kernels(struct sample_info& info, const std::vector<VkSampler>& samplers) {
     std::string typeLabel = pixel_traits<BufferPixelType>::type_name;
     typeLabel += '-';
     typeLabel += pixel_traits<ImagePixelType>::type_name;
@@ -1888,10 +1895,10 @@ void test_copytofromimage_kernels(struct sample_info& info, const std::vector<Vk
 
     std::string testLabel = "memory.spv/CopyBufferToImageKernel/";
     testLabel += typeLabel;
-    check_results<BufferPixelType, ImagePixelType>(
-            src_buffer.mem, dstImage.mem,
-            buffer_width, buffer_height, buffer_height,
-            testLabel.c_str());
+    bool result = check_results<BufferPixelType, ImagePixelType>(src_buffer.mem, dstImage.mem,
+                                                                 buffer_width, buffer_height,
+                                                                 buffer_height,
+                                                                 testLabel.c_str());
 
     run_copyimagetobuffer_kernel(info,
                                  samplers,
@@ -1907,14 +1914,17 @@ void test_copytofromimage_kernels(struct sample_info& info, const std::vector<Vk
 
     testLabel = "memory.spv/CopyImageToBufferKernel/";
     testLabel += typeLabel;
-    check_results<BufferPixelType, BufferPixelType>(
-            src_buffer.mem, dst_buffer.mem,
-            buffer_width, buffer_height, buffer_height,
-            testLabel.c_str());
+    result = check_results<BufferPixelType, BufferPixelType>(src_buffer.mem, dst_buffer.mem,
+                                                             buffer_width, buffer_height,
+                                                             buffer_height,
+                                                             testLabel.c_str())
+             && result;
 
     dstImage.reset();
     dst_buffer.reset();
     src_buffer.reset();
+
+    return result;
 }
 
 /* ============================================================================================== */
@@ -1954,16 +1964,21 @@ int sample_main(int argc, char *argv[]) {
                    std::back_inserter(samplers),
                    std::bind(create_compatible_sampler, info.device, std::placeholders::_1));
 
-    test_fill_kernel<float4>(info, samplers);
-    test_fill_kernel<half4>(info, samplers);
+    unsigned int num_successes = 0;
+    const unsigned num_tests = 9;
 
-    test_copytofromimage_kernels<unsigned char,float4>(info, samplers);
-    test_copytofromimage_kernels<uchar4,float4>(info, samplers);
-    test_copytofromimage_kernels<half,float4>(info, samplers);
-    test_copytofromimage_kernels<half4,float4>(info, samplers);
-    test_copytofromimage_kernels<float,float4>(info, samplers);
-    test_copytofromimage_kernels<float2,float4>(info, samplers);
-    test_copytofromimage_kernels<float4,float4>(info, samplers);
+    num_successes += test_fill_kernel<float4>(info, samplers);
+    num_successes += test_fill_kernel<half4>(info, samplers);
+
+    num_successes += test_copytofromimage_kernels<unsigned char,float4>(info, samplers);
+    num_successes += test_copytofromimage_kernels<uchar4,float4>(info, samplers);
+    num_successes += test_copytofromimage_kernels<half,float4>(info, samplers);
+    num_successes += test_copytofromimage_kernels<half4,float4>(info, samplers);
+    num_successes += test_copytofromimage_kernels<float,float4>(info, samplers);
+    num_successes += test_copytofromimage_kernels<float2,float4>(info, samplers);
+    num_successes += test_copytofromimage_kernels<float4,float4>(info, samplers);
+
+    const int num_failures = num_tests - num_successes;
 
     //
     // Clean up
@@ -1980,7 +1995,7 @@ int sample_main(int argc, char *argv[]) {
     destroy_device(info);
     destroy_instance(info);
 
-    LOGI("Complete!");
+    LOGI("Complete! %d tests passed. %d tests failed", num_successes, num_failures);
 
     return 0;
 }
