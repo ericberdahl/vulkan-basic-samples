@@ -258,20 +258,74 @@ struct memory_map {
     void*           data;
 };
 
+template <typename T>
+struct alignas(2*sizeof(T)) vec2 {
+    vec2() : x(), y() {}
+    vec2(T a, T b) : x(a), y(b) {}
+    vec2(const vec2<T>& other) : x(other.x), y(other.y) {}
+    vec2(vec2<T>&& other) : vec2() {
+        swap(*this, other);
+    }
+
+    vec2<T>& operator=(vec2<T> other) {
+        swap(*this, other);
+        return *this;
+    }
+
+    friend void swap(vec2<T>& first, vec2<T>& second) {
+        using std::swap;
+
+        swap(first.x, second.x);
+        swap(first.y, second.y);
+    }
+
+    friend bool operator==(const vec2<T>& l, const vec2<T>& r) {
+        return (l.x == r.x) && (l.y == r.y);
+    }
+
+    T   x;
+    T   y;
+};
+
+template <typename T>
+struct alignas(4*sizeof(T)) vec4 {
+    vec4() : x(), y(), z(), w() {}
+    vec4(T a, T b, T c, T d) : x(a), y(b), z(c), w(d) {}
+    vec4(const vec4<T>& other) : x(other.x), y(other.y), z(other.z), w(other.w) {}
+    vec4(vec4<T>&& other) : vec4() {
+        swap(*this, other);
+    }
+
+    vec4<T>& operator=(vec4<T> other) {
+        swap(*this, other);
+        return *this;
+    }
+
+    friend void swap(vec4<T>& first, vec4<T>& second) {
+        using std::swap;
+
+        swap(first.x, second.x);
+        swap(first.y, second.y);
+        swap(first.z, second.z);
+        swap(first.w, second.w);
+    }
+
+    friend bool operator==(const vec4<T>& l, const vec4<T>& r) {
+        return (l.x == r.x) && (l.y == r.y) && (l.z == r.z) && (l.w == r.w);
+    }
+
+    T   x;
+    T   y;
+    T   z;
+    T   w;
+};
+
 static_assert(sizeof(float) == 4, "bad size for float");
 
-struct alignas(8) float2 {
-    float x;
-    float y;
-};
+typedef vec2<float> float2;
 static_assert(sizeof(float2) == 8, "bad size for float2");
 
-struct alignas(16) float4 {
-    float x;
-    float y;
-    float z;
-    float w;
-};
+typedef vec4<float> float4;
 static_assert(sizeof(float4) == 16, "bad size for float4");
 
 struct half {
@@ -362,32 +416,12 @@ struct spv_map {
     std::vector<kernel>     kernels;
 };
 
-bool operator==(const float4& l, const float4& r) {
-    const int ulp = 2;
-    return almost_equal(l.w, r.w, ulp)
-           && almost_equal(l.x, r.x, ulp)
-           && almost_equal(l.y, r.y, ulp)
-           && almost_equal(l.z, r.z, ulp);
-}
-
-bool operator!=(const float4& l, const float4& r) {
-    return !(l == r);
-}
-
 bool operator==(const uchar4& l, const uchar4& r) {
     return (l.w == r.w && l.x == r.x && l.y == r.y && l.z == r.z);
 }
 
-bool operator!=(const uchar4& l, const uchar4& r) {
-    return !(l == r);
-}
-
 bool operator==(const half4& l, const half4& r) {
     return (l.w == r.w && l.x == r.x && l.y == r.y && l.z == r.z);
-}
-
-bool operator!=(const half4& l, const half4& r) {
-    return !(l == r);
 }
 
 template <typename T>
