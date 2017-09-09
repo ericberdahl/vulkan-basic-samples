@@ -190,8 +190,10 @@ struct memory_map {
 
 template <typename T>
 struct alignas(2*sizeof(T)) vec2 {
-    vec2() : x(), y() {}
     vec2(T a, T b) : x(a), y(b) {}
+    vec2(T a) : vec2(a, T(0)) {}
+    vec2() : vec2(T(0), T(0)) {}
+
     vec2(const vec2<T>& other) : x(other.x), y(other.y) {}
     vec2(vec2<T>&& other) : vec2() {
         swap(*this, other);
@@ -202,25 +204,31 @@ struct alignas(2*sizeof(T)) vec2 {
         return *this;
     }
 
-    friend void swap(vec2<T>& first, vec2<T>& second) {
-        using std::swap;
-
-        swap(first.x, second.x);
-        swap(first.y, second.y);
-    }
-
-    friend bool operator==(const vec2<T>& l, const vec2<T>& r) {
-        return (l.x == r.x) && (l.y == r.y);
-    }
-
     T   x;
     T   y;
 };
 
 template <typename T>
+void swap(vec2<T>& first, vec2<T>& second) {
+    using std::swap;
+
+    swap(first.x, second.x);
+    swap(first.y, second.y);
+}
+
+template <typename T>
+bool operator==(const vec2<T>& l, const vec2<T>& r) {
+    return (l.x == r.x) && (l.y == r.y);
+}
+
+template <typename T>
 struct alignas(4*sizeof(T)) vec4 {
-    vec4() : x(), y(), z(), w() {}
     vec4(T a, T b, T c, T d) : x(a), y(b), z(c), w(d) {}
+    vec4(T a, T b, T c) : vec4(a, b, c, T(0)) {}
+    vec4(T a, T b) : vec4(a, b, T(0), T(0)) {}
+    vec4(T a) : vec4(a, T(0), T(0), T(0)) {}
+    vec4() : vec4(T(0), T(0), T(0), T(0)) {}
+
     vec4(const vec4<T>& other) : x(other.x), y(other.y), z(other.z), w(other.w) {}
     vec4(vec4<T>&& other) : vec4() {
         swap(*this, other);
@@ -231,37 +239,55 @@ struct alignas(4*sizeof(T)) vec4 {
         return *this;
     }
 
-    friend void swap(vec4<T>& first, vec4<T>& second) {
-        using std::swap;
-
-        swap(first.x, second.x);
-        swap(first.y, second.y);
-        swap(first.z, second.z);
-        swap(first.w, second.w);
-    }
-
-    friend bool operator==(const vec4<T>& l, const vec4<T>& r) {
-        return (l.x == r.x) && (l.y == r.y) && (l.z == r.z) && (l.w == r.w);
-    }
-
     T   x;
     T   y;
     T   z;
     T   w;
 };
 
+template <typename T>
+void swap(vec4<T>& first, vec4<T>& second) {
+    using std::swap;
+
+    swap(first.x, second.x);
+    swap(first.y, second.y);
+    swap(first.z, second.z);
+    swap(first.w, second.w);
+}
+
+template <typename T>
+bool operator==(const vec4<T>& l, const vec4<T>& r) {
+    return (l.x == r.x) && (l.y == r.y) && (l.z == r.z) && (l.w == r.w);
+}
+
 static_assert(sizeof(float) == 4, "bad size for float");
 
 typedef vec2<float> float2;
 static_assert(sizeof(float2) == 8, "bad size for float2");
 
+template<>
+bool operator==(const float2& l, const float2& r) {
+    const int ulp = 2;
+    return almost_equal(l.x, r.x, ulp)
+           && almost_equal(l.y, r.y, ulp);
+}
+
 typedef vec4<float> float4;
 static_assert(sizeof(float4) == 16, "bad size for float4");
+
+template<>
+bool operator==(const float4& l, const float4& r) {
+    const int ulp = 2;
+    return almost_equal(l.x, r.x, ulp)
+           && almost_equal(l.y, r.y, ulp)
+           && almost_equal(l.z, r.z, ulp)
+           && almost_equal(l.w, r.w, ulp);
+}
 
 struct half {
     half() : x() {}
     half(uint16_t ui) : x(ui) {}
-    
+
     uint16_t    x;
 };
 static_assert(sizeof(half) == 2, "bad size for half");
