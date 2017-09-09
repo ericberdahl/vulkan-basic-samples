@@ -350,35 +350,19 @@ static_assert(sizeof(half4) == 8, "bad size for half4");
 typedef unsigned short   ushort;
 static_assert(sizeof(ushort) == 2, "bad size for ushort");
 
-struct ushort2 {
-    ushort   x;
-    ushort   y;
-};
+typedef vec2<ushort> ushort2;
 static_assert(sizeof(ushort2) == 4, "bad size for ushort2");
 
-struct ushort4 {
-    ushort  x;
-    ushort  y;
-    ushort  z;
-    ushort  w;
-};
+typedef vec4<ushort> ushort4;
 static_assert(sizeof(ushort4) == 8, "bad size for ushort4");
 
 typedef unsigned char   uchar;
 static_assert(sizeof(uchar) == 1, "bad size for uchar");
 
-struct uchar2 {
-    uchar   x;
-    uchar   y;
-};
+typedef vec2<uchar> uchar2;
 static_assert(sizeof(uchar2) == 2, "bad size for uchar2");
 
-struct uchar4 {
-    uchar   x;
-    uchar   y;
-    uchar   z;
-    uchar   w;
-};
+typedef vec4<uchar> uchar4;
 static_assert(sizeof(uchar4) == 4, "bad size for uchar4");
 
 struct spv_map {
@@ -415,14 +399,6 @@ struct spv_map {
     std::vector<sampler>    samplers;
     std::vector<kernel>     kernels;
 };
-
-bool operator==(const uchar4& l, const uchar4& r) {
-    return (l.w == r.w && l.x == r.x && l.y == r.y && l.z == r.z);
-}
-
-bool operator==(const half4& l, const half4& r) {
-    return (l.w == r.w && l.x == r.x && l.y == r.y && l.z == r.z);
-}
 
 template <typename T>
 struct pixel_traits {};
