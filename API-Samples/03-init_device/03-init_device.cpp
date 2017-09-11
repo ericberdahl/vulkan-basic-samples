@@ -24,6 +24,8 @@ create and destroy a Vulkan physical device
 
 /* This is part of the draw cube progression */
 
+#include "half.hpp"
+
 #include <algorithm>
 #include <functional>
 #include <iostream>
@@ -284,12 +286,7 @@ bool operator==(const float4& l, const float4& r) {
            && almost_equal(l.w, r.w, ulp);
 }
 
-struct half {
-    half() : x() {}
-    half(uint16_t ui) : x(ui) {}
-
-    uint16_t    x;
-};
+typedef half_float::half    half;
 static_assert(sizeof(half) == 2, "bad size for half");
 
 typedef vec2<half> half2;
@@ -315,78 +312,6 @@ static_assert(sizeof(uchar2) == 2, "bad size for uchar2");
 
 typedef vec4<uchar> uchar4;
 static_assert(sizeof(uchar4) == 4, "bad size for uchar4");
-
-class Float16Compressor
-{
-    union Bits
-    {
-        float f;
-        int32_t si;
-        uint32_t ui;
-    };
-
-    static int const shift = 13;
-    static int const shiftSign = 16;
-
-    static int32_t const infN = 0x7F800000; // flt32 infinity
-    static int32_t const maxN = 0x477FE000; // max flt16 normal as a flt32
-    static int32_t const minN = 0x38800000; // min flt16 normal as a flt32
-    static int32_t const signN = 0x80000000; // flt32 sign bit
-
-    static int32_t const infC = infN >> shift;
-    static int32_t const nanN = (infC + 1) << shift; // minimum flt16 nan as a flt32
-    static int32_t const maxC = maxN >> shift;
-    static int32_t const minC = minN >> shift;
-    static int32_t const signC = signN >> shiftSign; // flt16 sign bit
-
-    static int32_t const mulN = 0x52000000; // (1 << 23) / minN
-    static int32_t const mulC = 0x33800000; // minN / (1 << (23 - shift))
-
-    static int32_t const subC = 0x003FF; // max flt32 subnormal down shifted
-    static int32_t const norC = 0x00400; // min flt32 normal down shifted
-
-    static int32_t const maxD = infC - maxC - 1;
-    static int32_t const minD = minC - subC - 1;
-
-public:
-
-    static half compress(float value)
-    {
-        Bits v, s;
-        v.f = value;
-        uint32_t sign = v.si & signN;
-        v.si ^= sign;
-        sign >>= shiftSign; // logical shift
-        s.si = mulN;
-        s.si = s.f * v.f; // correct subnormals
-        v.si ^= (s.si ^ v.si) & -(minN > v.si);
-        v.si ^= (infN ^ v.si) & -((infN > v.si) & (v.si > maxN));
-        v.si ^= (nanN ^ v.si) & -((nanN > v.si) & (v.si > infN));
-        v.ui >>= shift; // logical shift
-        v.si ^= ((v.si - maxD) ^ v.si) & -(v.si > maxC);
-        v.si ^= ((v.si - minD) ^ v.si) & -(v.si > subC);
-        return { (uint16_t) (v.ui | sign) };
-    }
-
-    static float decompress(half value)
-    {
-        Bits v;
-        v.ui = value.x;
-        int32_t sign = v.si & signC;
-        v.si ^= sign;
-        sign <<= shiftSign;
-        v.si ^= ((v.si + minD) ^ v.si) & -(v.si > subC);
-        v.si ^= ((v.si + maxD) ^ v.si) & -(v.si > maxC);
-        Bits s;
-        s.si = mulC;
-        s.f *= v.si;
-        int32_t mask = -(norC > v.si);
-        v.si <<= shift;
-        v.si ^= (s.si ^ v.si) & mask;
-        v.si |= sign;
-        return v.f;
-    }
-};
 
 /* ============================================================================================== */
 
@@ -478,19 +403,19 @@ struct pixel_traits<float4> {
 
     static float4 translate(const half4& pixel) {
         return {
-                Float16Compressor::decompress(pixel.x),
-                Float16Compressor::decompress(pixel.y),
-                Float16Compressor::decompress(pixel.z),
-                Float16Compressor::decompress(pixel.w)
+                pixel.x,
+                pixel.y,
+                pixel.z,
+                pixel.w
         };
     }
 
     static float4 translate(const half2& pixel) {
-        return translate((half4){ pixel.x, pixel.y, 0, 0 });
+        return translate((half4){ pixel.x, pixel.y, half(0.0f), half(0.0f) });
     }
 
     static float4 translate(const half& pixel) {
-        return translate((half4){ pixel, 0, 0, 0 });
+        return translate((half4){ pixel, half(0.0f), half(0.0f), half(0.0f) });
     }
 
     static float4 translate(const uchar4& pixel) {
@@ -524,7 +449,7 @@ struct pixel_traits<half> {
 
     static half translate(const float4& pixel) {
         return {
-                Float16Compressor::compress(pixel.x)
+                half(pixel.x)
         };
     }
 };
@@ -542,8 +467,8 @@ struct pixel_traits<half2> {
 
     static half2 translate(const float4& pixel) {
         return {
-                Float16Compressor::compress(pixel.x),
-                Float16Compressor::compress(pixel.y)
+                half(pixel.x),
+                half(pixel.y)
         };
     }
 };
@@ -560,10 +485,10 @@ struct pixel_traits<half4> {
 
     static half4 translate(const float4& pixel) {
         return {
-                Float16Compressor::compress(pixel.x),
-                Float16Compressor::compress(pixel.y),
-                Float16Compressor::compress(pixel.z),
-                Float16Compressor::compress(pixel.w)
+                half(pixel.x),
+                half(pixel.y),
+                half(pixel.z),
+                half(pixel.w)
         };
     }
 
