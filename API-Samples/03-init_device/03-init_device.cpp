@@ -2037,6 +2037,8 @@ bool test_copytofromimage_kernels(const sample_info&            info,
 
 /* ============================================================================================== */
 
+typedef bool (*test_fn_t)(const sample_info&, const std::vector<VkSampler>&, bool, bool);
+
 int sample_main(int argc, char *argv[]) {
     struct sample_info info = {};
     init_global_layer_properties(info);
@@ -2073,27 +2075,33 @@ int sample_main(int argc, char *argv[]) {
                    std::bind(create_compatible_sampler, info.device, std::placeholders::_1));
 
     unsigned int num_successes = 0;
-    const unsigned num_tests = 16;
 
-    num_successes += test_fill_kernel<float4>(info, samplers);
-    num_successes += test_fill_kernel<half4>(info, samplers);
+    const test_fn_t tests[] = {
+            test_fill_kernel<float4>,
+            test_fill_kernel<half4>,
 
-    num_successes += test_copytofromimage_kernels<uchar,float4>(info, samplers);
-    num_successes += test_copytofromimage_kernels<uchar4,float4>(info, samplers);
-    num_successes += test_copytofromimage_kernels<half,float4>(info, samplers);
-    num_successes += test_copytofromimage_kernels<half4,float4>(info, samplers);
-    num_successes += test_copytofromimage_kernels<float,float4>(info, samplers);
-    num_successes += test_copytofromimage_kernels<float2,float4>(info, samplers);
-    num_successes += test_copytofromimage_kernels<float4,float4>(info, samplers);
+            test_copytofromimage_kernels<uchar,float4>,
+            test_copytofromimage_kernels<uchar4,float4>,
+            test_copytofromimage_kernels<half,float4>,
+            test_copytofromimage_kernels<half4,float4>,
+            test_copytofromimage_kernels<float,float4>,
+            test_copytofromimage_kernels<float2,float4>,
+            test_copytofromimage_kernels<float4,float4>,
 
-    num_successes += test_copytofromimage_kernels<uchar,half4>(info, samplers);
-    num_successes += test_copytofromimage_kernels<uchar4,half4>(info, samplers);
-    num_successes += test_copytofromimage_kernels<half,half4>(info, samplers);
-    num_successes += test_copytofromimage_kernels<half4,half4>(info, samplers);
-    num_successes += test_copytofromimage_kernels<float,half4>(info, samplers);
-    num_successes += test_copytofromimage_kernels<float2,half4>(info, samplers);
-    num_successes += test_copytofromimage_kernels<float4,half4>(info, samplers);
+            test_copytofromimage_kernels<uchar,half4>,
+            test_copytofromimage_kernels<uchar4,half4>,
+            test_copytofromimage_kernels<half,half4>,
+            test_copytofromimage_kernels<half4,half4>,
+            test_copytofromimage_kernels<float,half4>,
+            test_copytofromimage_kernels<float2,half4>,
+            test_copytofromimage_kernels<float4,half4>
+    };
 
+    for (auto t : tests) {
+        num_successes += t(info, samplers, false, false);
+    }
+
+    const int num_tests = sizeof(tests) / sizeof(tests[0]);
     const int num_failures = num_tests - num_successes;
 
     //
