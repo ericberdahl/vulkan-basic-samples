@@ -136,7 +136,7 @@ struct device_memory {
 
 struct buffer {
     buffer() : mem(), buf(VK_NULL_HANDLE) {}
-    buffer(sample_info &info, VkDeviceSize num_bytes) : buffer(info.device, info.memory_properties, num_bytes) {}
+    buffer(const sample_info &info, VkDeviceSize num_bytes) : buffer(info.device, info.memory_properties, num_bytes) {}
 
     buffer(VkDevice dev, const VkPhysicalDeviceMemoryProperties memoryProperties, VkDeviceSize num_bytes) : buffer() {
         allocate(dev, memoryProperties, num_bytes);
@@ -151,7 +151,7 @@ struct buffer {
 
 struct image {
     image() : mem(), im(VK_NULL_HANDLE), view(VK_NULL_HANDLE) {}
-    image(sample_info&  info,
+    image(const sample_info&  info,
           uint32_t      width,
           uint32_t      height,
           VkFormat      format) : image(info.device, info.memory_properties, width, height, format) {}
@@ -1605,7 +1605,7 @@ void kernel_invocation::run(VkQueue                     queue,
 
 /* ============================================================================================== */
 
-void run_fill_kernel(struct sample_info&            info,
+void run_fill_kernel(const sample_info&             info,
                      const std::vector<VkSampler>&  samplers,
                      VkBuffer                       dst_buffer,
                      int                            pitch,
@@ -1658,7 +1658,7 @@ void run_fill_kernel(struct sample_info&            info,
     invocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
 }
 
-void run_copybuffertoimage_kernel(struct sample_info& info,
+void run_copybuffertoimage_kernel(const sample_info& info,
                                   const std::vector<VkSampler>& samplers,
                                   VkBuffer  src_buffer,
                                   VkImageView   dst_image,
@@ -1718,7 +1718,7 @@ void run_copybuffertoimage_kernel(struct sample_info& info,
     invocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
 }
 
-void run_copyimagetobuffer_kernel(struct sample_info& info,
+void run_copyimagetobuffer_kernel(const sample_info& info,
                                   const std::vector<VkSampler>& samplers,
                                   VkImageView src_image,
                                   VkBuffer dst_buffer,
@@ -1902,7 +1902,7 @@ bool check_results(const device_memory& observed,
 /* ============================================================================================== */
 
 template <typename PixelType>
-bool test_fill_kernel(struct sample_info&           info,
+bool test_fill_kernel(const sample_info&            info,
                       const std::vector<VkSampler>& samplers,
                       bool                          logIncorrect = false,
                       bool                          logCorrect = false) {
@@ -1951,7 +1951,7 @@ bool test_fill_kernel(struct sample_info&           info,
 /* ============================================================================================== */
 
 template <typename BufferPixelType, typename ImagePixelType>
-bool test_copytofromimage_kernels(struct sample_info&           info,
+bool test_copytofromimage_kernels(const sample_info&            info,
                                   const std::vector<VkSampler>& samplers,
                                   bool                          logIncorrect = false,
                                   bool                          logCorrect = false) {
