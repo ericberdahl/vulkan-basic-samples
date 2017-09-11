@@ -289,6 +289,10 @@ bool operator==(const float4& l, const float4& r) {
 typedef half_float::half    half;
 static_assert(sizeof(half) == 2, "bad size for half");
 
+template <>
+struct std::is_floating_point<half> : std::true_type {};
+static_assert(std::is_floating_point<half>::value, "half should be floating point");
+
 typedef vec2<half> half2;
 static_assert(sizeof(half2) == 4, "bad size for half2");
 
@@ -388,6 +392,18 @@ struct pixel_traits<float> {
 
     static float translate(const float& pixel) { return pixel; }
 
+    static float translate(half pixel) {
+        return half(pixel);
+    }
+
+    static float translate(uchar pixel) {
+        return (pixel / (float) std::numeric_limits<uchar>::max());
+    }
+
+    static float translate(const float2& pixel) {
+        return pixel.x;
+    }
+
     static float translate(const float4& pixel) {
         return pixel.x;
     }
@@ -404,10 +420,17 @@ struct pixel_traits<float2> {
     static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static const VkFormat vk_pixel_type = VK_FORMAT_R32G32_SFLOAT;
 
-    static float2 translate(const float2& pixel) { return pixel; }
+    template <typename T>
+    static float2 translate(const vec2<T>& pixel) {
+        return {
+                pixel_traits<float>::translate(pixel.x),
+                pixel_traits<float>::translate(pixel.y)
+        };
+    }
 
-    static float2 translate(const float4& pixel) {
-        return { pixel.x, pixel.y };
+    template <typename T>
+    static float2 translate(const vec4<T>& pixel) {
+        return translate((vec2<T>){ pixel.x, pixel.y });
     }
 };
 
@@ -423,44 +446,34 @@ struct pixel_traits<float4> {
     static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static const VkFormat vk_pixel_type = VK_FORMAT_R32G32B32A32_SFLOAT;
 
-    static float4 translate(const float4& pixel) { return pixel; }
-
-    static float4 translate(const float2& pixel) { return { pixel.x, pixel.y, 0.0f, 0.0f }; }
-
-    static float4 translate(float pixel) { return { pixel, 0.0f, 0.0f, 0.0f }; }
-
-    static float4 translate(const half4& pixel) {
+    template <typename T>
+    static float4 translate(const vec4<T>& pixel) {
         return {
-                pixel.x,
-                pixel.y,
-                pixel.z,
-                pixel.w
+                pixel_traits<float>::translate(pixel.x),
+                pixel_traits<float>::translate(pixel.y),
+                pixel_traits<float>::translate(pixel.z),
+                pixel_traits<float>::translate(pixel.w)
         };
     }
 
-    static float4 translate(const half2& pixel) {
-        return translate((half4){ pixel.x, pixel.y, half(0.0f), half(0.0f) });
-    }
-
-    static float4 translate(const half& pixel) {
-        return translate((half4){ pixel, half(0.0f), half(0.0f), half(0.0f) });
-    }
-
-    static float4 translate(const uchar4& pixel) {
+    template <typename T>
+    static float4 translate(const vec2<T>& pixel) {
         return {
-                pixel.x / (float) std::numeric_limits<uchar>::max(),
-                pixel.y / (float) std::numeric_limits<uchar>::max(),
-                pixel.z / (float) std::numeric_limits<uchar>::max(),
-                pixel.w / (float) std::numeric_limits<uchar>::max()
+                pixel_traits<float>::translate(pixel.x),
+                pixel_traits<float>::translate(pixel.y),
+                0.0f,
+                0.0f
         };
     }
 
-    static float4 translate(const uchar2& pixel) {
-        return translate((uchar4){ pixel.x, pixel.y, 0, 0 });
-    }
-
-    static float4 translate(uchar pixel) {
-        return translate((uchar4){ pixel, 0, 0, 0 });
+    template <typename T>
+    static float4 translate(T pixel) {
+        return {
+                pixel_traits<float>::translate(pixel),
+                0.0f,
+                0.0f,
+                0.0f
+        };
     }
 };
 
@@ -475,12 +488,22 @@ struct pixel_traits<half> {
     static const int cl_pixel_type = CL_HALF_FLOAT;
     static const VkFormat vk_pixel_type = VK_FORMAT_R16_SFLOAT;
 
+    static half translate(float pixel) { return half(pixel); }
+
     static half translate(const half& pixel) { return pixel; }
 
-    static half translate(const float4& pixel) {
-        return {
-                half(pixel.x)
-        };
+    static half translate(uchar pixel) {
+        return translate(pixel / (float) std::numeric_limits<uchar>::max());
+    }
+
+    template <typename T>
+    static half translate(const vec4<T>& pixel) {
+        return translate(pixel.x);
+    }
+
+    template <typename T>
+    static half translate(const vec2<T>& pixel) {
+        return translate(pixel.x);
     }
 };
 
@@ -497,7 +520,16 @@ struct pixel_traits<half2> {
 
     static half2 translate(const half2& pixel) { return pixel; }
 
+    static half2 translate(const half4& pixel) { return { pixel.x, pixel.y }; }
+
     static half2 translate(const float4& pixel) {
+        return {
+                half(pixel.x),
+                half(pixel.y)
+        };
+    }
+
+    static half2 translate(const float2& pixel) {
         return {
                 half(pixel.x),
                 half(pixel.y)
@@ -517,16 +549,35 @@ struct pixel_traits<half4> {
     static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static const VkFormat vk_pixel_type = VK_FORMAT_R16G16B16A16_SFLOAT;
 
-    static half4 translate(const float4& pixel) {
+    template <typename T>
+    static half4 translate(const vec4<T>& pixel) {
         return {
-                half(pixel.x),
-                half(pixel.y),
-                half(pixel.z),
-                half(pixel.w)
+                pixel_traits<half>::translate(pixel.x),
+                pixel_traits<half>::translate(pixel.y),
+                pixel_traits<half>::translate(pixel.z),
+                pixel_traits<half>::translate(pixel.w)
         };
     }
 
-    static half4 translate(const half4& pixel) { return pixel; }
+    template <typename T>
+    static half4 translate(const vec2<T>& pixel) {
+        return {
+                pixel_traits<half>::translate(pixel.x),
+                pixel_traits<half>::translate(pixel.y),
+                0.0f,
+                0.0f
+        };
+    }
+
+    template <typename T>
+    static half4 translate(T pixel) {
+        return {
+                pixel_traits<half>::translate(pixel),
+                0.0f,
+                0.0f,
+                0.0f
+        };
+    }
 };
 
 template <>
@@ -588,7 +639,7 @@ struct pixel_traits<ushort4> {
         };
     }
 
-    static uchar4 translate(const uchar4& pixel) { return pixel; }
+    static ushort4 translate(const ushort4& pixel) { return pixel; }
 };
 
 template <>
@@ -602,11 +653,25 @@ struct pixel_traits<uchar> {
     static const int cl_pixel_type = CL_UNORM_INT8;
     static const VkFormat vk_pixel_type = VK_FORMAT_R8_UNORM;
 
-    static uchar translate(const float4& pixel) {
-        return (uchar) (pixel.x * std::numeric_limits<uchar>::max());
+    static uchar translate(float pixel) {
+        return (uchar) (pixel * std::numeric_limits<uchar>::max());
+    }
+
+    static uchar translate(half pixel) {
+        return (uchar) (pixel * std::numeric_limits<uchar>::max());
     }
 
     static uchar translate(uchar pixel) { return pixel; }
+
+    template <typename T>
+    static uchar translate(const vec4<T>& pixel) {
+        return translate(pixel.x);
+    }
+
+    template <typename T>
+    static uchar translate(const vec2<T>& pixel) {
+        return translate(pixel.x);
+    }
 };
 
 template <>
@@ -647,6 +712,15 @@ struct pixel_traits<uchar4> {
                 (uchar) (pixel.y * std::numeric_limits<uchar>::max()),
                 (uchar) (pixel.z * std::numeric_limits<uchar>::max()),
                 (uchar) (pixel.w * std::numeric_limits<uchar>::max())
+        };
+    }
+
+    static uchar4 translate(const half4& pixel) {
+        return {
+                (uchar) (pixel.x * std::numeric_limits<half>::max()),
+                (uchar) (pixel.y * std::numeric_limits<half>::max()),
+                (uchar) (pixel.z * std::numeric_limits<half>::max()),
+                (uchar) (pixel.w * std::numeric_limits<half>::max())
         };
     }
 
@@ -1831,10 +1905,57 @@ struct pixel_promotion {
 
     typedef typename pixel_traits<ExpectedPixelType>::component_t   expected_comp_type;
     typedef typename pixel_traits<ObservedPixelType>::component_t   observed_comp_type;
-    typedef typename std::conditional<sizeof(expected_comp_type) < sizeof(observed_comp_type), expected_comp_type, observed_comp_type>::type comp_type;
+
+    static constexpr const bool expected_is_smaller = sizeof(expected_comp_type) < sizeof(observed_comp_type);
+    typedef typename std::conditional<expected_is_smaller, expected_comp_type, observed_comp_type>::type smaller_comp_type;
+    typedef typename std::conditional<!expected_is_smaller, expected_comp_type, observed_comp_type>::type larger_comp_type;
+
+    static constexpr const bool smaller_is_floating = std::is_floating_point<smaller_comp_type>::value;
+    typedef typename std::conditional<smaller_is_floating, smaller_comp_type, larger_comp_type>::type comp_type;
 
     typedef typename pixel_vector<comp_type, vec_size>::type promotion_type;
 };
+
+template <typename T> struct pixel_comparator {};
+
+template <>
+struct pixel_comparator<float> {
+    static bool is_equal(float l, float r) {
+        const int ulp = 2;
+        return almost_equal(l, r, ulp);
+    }
+};
+
+template <>
+struct pixel_comparator<half> {
+    static bool is_equal(half l, half r) {
+        const int ulp = 2;
+        return almost_equal(l, r, ulp);
+    }
+};
+
+template <typename T>
+struct pixel_comparator< vec2<T> > {
+    static bool is_equal(const vec2<T>& l, const vec2<T>& r) {
+        return pixel_comparator<T>::is_equal(l.x, r.x)
+               && pixel_comparator<T>::is_equal(l.y, r.y);
+    }
+};
+
+template <typename T>
+struct pixel_comparator< vec4<T> > {
+    static bool is_equal(const vec4<T> &l, const vec4<T> &r) {
+        return pixel_comparator<T>::is_equal(l.x, r.x)
+               && pixel_comparator<T>::is_equal(l.y, r.y)
+               && pixel_comparator<T>::is_equal(l.z, r.z)
+               && pixel_comparator<T>::is_equal(l.w, r.w);
+    }
+};
+
+template <typename T>
+bool pixel_compare(const T& l, const T& r) {
+    return pixel_comparator<T>::is_equal(l, r);
+}
 
 template <typename ExpectedPixelType, typename ObservedPixelType>
 bool check_result(ExpectedPixelType expected_pixel,
@@ -1849,7 +1970,10 @@ bool check_result(ExpectedPixelType expected_pixel,
     auto expected = pixel_traits<promotion_type>::translate(expected_pixel);
     auto observed = pixel_traits<promotion_type>::translate(observed_pixel);
 
-    const bool pixel_is_correct = (observed == expected);
+    auto t_expected = pixel_traits<float4>::translate(expected);
+    auto t_observed = pixel_traits<float4>::translate(observed);
+
+    const bool pixel_is_correct = pixel_compare(observed, expected);
     if (pixel_is_correct) {
         if (logCorrect) {
             LOGE("%s:  CORRECT pixel{row:%d, col%d}", label, row, column);
@@ -2197,15 +2321,14 @@ int sample_main(int argc, char *argv[]) {
             test_copyfromimage_kernel<float,float4>,
             test_copyfromimage_kernel<float2,float4>,
             test_copyfromimage_kernel<float4,float4>,
-/*
-            test_copytofromimage_kernels<uchar,half4>,
-            test_copytofromimage_kernels<uchar4,half4>,
-            test_copytofromimage_kernels<half,half4>,
-            test_copytofromimage_kernels<half4,half4>,
-            test_copytofromimage_kernels<float,half4>,
-            test_copytofromimage_kernels<float2,half4>,
-            test_copytofromimage_kernels<float4,half4>
-            */
+
+            test_copytoimage_kernel<uchar,half4>,
+            test_copytoimage_kernel<uchar4,half4>,
+            test_copytoimage_kernel<half,half4>,
+            test_copytoimage_kernel<half4,half4>,
+            test_copytoimage_kernel<float,half4>,
+            test_copytoimage_kernel<float2,half4>,
+            test_copytoimage_kernel<float4,half4>
     };
 
     for (auto t : tests) {
