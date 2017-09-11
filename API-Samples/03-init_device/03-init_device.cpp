@@ -350,6 +350,28 @@ struct spv_map {
     std::vector<kernel>     kernels;
 };
 
+/* ============================================================================================== */
+
+template <typename ComponentType, int N>
+struct pixel_vector { };
+
+template <typename ComponentType>
+struct pixel_vector<ComponentType,1> {
+    typedef ComponentType   type;
+};
+
+template <typename ComponentType>
+struct pixel_vector<ComponentType,2> {
+    typedef vec2<ComponentType> type;
+};
+
+template <typename ComponentType>
+struct pixel_vector<ComponentType,4> {
+    typedef vec4<ComponentType> type;
+};
+
+/* ============================================================================================== */
+
 template <typename T>
 struct pixel_traits {};
 
@@ -357,9 +379,11 @@ template <>
 struct pixel_traits<float> {
     typedef float   component_t;
 
+    static constexpr const int num_components = 1;
+    static constexpr const char* const type_name = "float";
+
     static const int cl_pixel_order = CL_R;
     static const int cl_pixel_type = CL_FLOAT;
-    static constexpr const char* const type_name = "float";
     static const VkFormat vk_pixel_type = VK_FORMAT_R32_SFLOAT;
 
     static float translate(const float& pixel) { return pixel; }
@@ -373,9 +397,11 @@ template <>
 struct pixel_traits<float2> {
     typedef float   component_t;
 
+    static constexpr const int num_components = 2;
+    static constexpr const char* const type_name = "float2";
+
     static const int cl_pixel_order = CL_RG;
     static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
-    static constexpr const char* const type_name = "float2";
     static const VkFormat vk_pixel_type = VK_FORMAT_R32G32_SFLOAT;
 
     static float2 translate(const float2& pixel) { return pixel; }
@@ -389,10 +415,12 @@ template <>
 struct pixel_traits<float4> {
     typedef float   component_t;
 
+    static constexpr const int num_components = 4;
+    static constexpr const char* const type_name = "float4";
+
     static const int device_pixel_format = 1; // kDevicePixelFormat_BGRA_4444_32f
     static const int cl_pixel_order = CL_RGBA;
     static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
-    static constexpr const char* const type_name = "float4";
     static const VkFormat vk_pixel_type = VK_FORMAT_R32G32B32A32_SFLOAT;
 
     static float4 translate(const float4& pixel) { return pixel; }
@@ -440,9 +468,11 @@ template <>
 struct pixel_traits<half> {
     typedef half    component_t;
 
+    static constexpr const int num_components = 1;
+    static constexpr const char* const type_name = "half";
+
     static const int cl_pixel_order = CL_R;
     static const int cl_pixel_type = CL_HALF_FLOAT;
-    static constexpr const char* const type_name = "half";
     static const VkFormat vk_pixel_type = VK_FORMAT_R16_SFLOAT;
 
     static half translate(const half& pixel) { return pixel; }
@@ -458,9 +488,11 @@ template <>
 struct pixel_traits<half2> {
     typedef half    component_t;
 
+    static constexpr const int num_components = 2;
+    static constexpr const char* const type_name = "half2";
+
     static const int cl_pixel_order = CL_RG;
     static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
-    static constexpr const char* const type_name = "half2";
     static const VkFormat vk_pixel_type = VK_FORMAT_R16G16_SFLOAT;
 
     static half2 translate(const half2& pixel) { return pixel; }
@@ -477,10 +509,12 @@ template <>
 struct pixel_traits<half4> {
     typedef half    component_t;
 
+    static constexpr const int num_components = 4;
+    static constexpr const char* const type_name = "half4";
+
     static const int device_pixel_format = 0; // kDevicePixelFormat_BGRA_4444_16f
     static const int cl_pixel_order = CL_RGBA;
     static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
-    static constexpr const char* const type_name = "half4";
     static const VkFormat vk_pixel_type = VK_FORMAT_R16G16B16A16_SFLOAT;
 
     static half4 translate(const float4& pixel) {
@@ -499,9 +533,11 @@ template <>
 struct pixel_traits<ushort> {
     typedef ushort    component_t;
 
+    static constexpr const int num_components = 1;
+    static constexpr const char* const type_name = "ushort";
+
     static const int cl_pixel_order = CL_R;
     static const int cl_pixel_type = CL_UNSIGNED_INT16;
-    static constexpr const char* const type_name = "ushort";
     static const VkFormat vk_pixel_type = VK_FORMAT_R16_UINT;
 
     static ushort translate(const float4& pixel) {
@@ -515,9 +551,11 @@ template <>
 struct pixel_traits<ushort2> {
     typedef ushort    component_t;
 
+    static constexpr const int num_components = 2;
+    static constexpr const char* const type_name = "ushort2";
+
     static const int cl_pixel_order = CL_RG;
     static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
-    static constexpr const char* const type_name = "ushort2";
     static const VkFormat vk_pixel_type = VK_FORMAT_R16G16_UINT;
 
     static ushort2 translate(const float4& pixel) {
@@ -534,9 +572,11 @@ template <>
 struct pixel_traits<ushort4> {
     typedef ushort    component_t;
 
+    static constexpr const int num_components = 4;
+    static constexpr const char* const type_name = "ushort4";
+
     static const int cl_pixel_order = CL_RGBA;
     static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
-    static constexpr const char* const type_name = "ushort4";
     static const VkFormat vk_pixel_type = VK_FORMAT_R16G16B16A16_UINT;
 
     static ushort4 translate(const float4& pixel) {
@@ -555,9 +595,11 @@ template <>
 struct pixel_traits<uchar> {
     typedef uchar    component_t;
 
+    static constexpr const int num_components = 1;
+    static constexpr const char* const type_name = "uchar";
+
     static const int cl_pixel_order = CL_R;
     static const int cl_pixel_type = CL_UNORM_INT8;
-    static constexpr const char* const type_name = "uchar";
     static const VkFormat vk_pixel_type = VK_FORMAT_R8_UNORM;
 
     static uchar translate(const float4& pixel) {
@@ -571,9 +613,11 @@ template <>
 struct pixel_traits<uchar2> {
     typedef uchar    component_t;
 
+    static constexpr const int num_components = 2;
+    static constexpr const char* const type_name = "uchar2";
+
     static const int cl_pixel_order = CL_RG;
     static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
-    static constexpr const char* const type_name = "uchar2";
     static const VkFormat vk_pixel_type = VK_FORMAT_R8G8_UNORM;
 
     static uchar2 translate(const float4& pixel) {
@@ -590,9 +634,11 @@ template <>
 struct pixel_traits<uchar4> {
     typedef uchar    component_t;
 
+    static constexpr const int num_components = 4;
+    static constexpr const char* const type_name = "uchar4";
+
     static const int cl_pixel_order = CL_RGBA;
     static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
-    static constexpr const char* const type_name = "uchar4";
     static const VkFormat vk_pixel_type = VK_FORMAT_R8G8B8A8_UNORM;
 
     static uchar4 translate(const float4& pixel) {
@@ -1778,6 +1824,19 @@ void run_copyimagetobuffer_kernel(const sample_info& info,
 /* ============================================================================================== */
 
 template <typename ExpectedPixelType, typename ObservedPixelType>
+struct pixel_promotion {
+    static constexpr const int expected_vec_size = pixel_traits<ExpectedPixelType>::num_components;
+    static constexpr const int observed_vec_size = pixel_traits<ObservedPixelType>::num_components;
+    static constexpr const int vec_size = (expected_vec_size > observed_vec_size ? observed_vec_size : expected_vec_size);
+
+    typedef typename pixel_traits<ExpectedPixelType>::component_t   expected_comp_type;
+    typedef typename pixel_traits<ObservedPixelType>::component_t   observed_comp_type;
+    typedef typename std::conditional<sizeof(expected_comp_type) < sizeof(observed_comp_type), expected_comp_type, observed_comp_type>::type comp_type;
+
+    typedef typename pixel_vector<comp_type, vec_size>::type promotion_type;
+};
+
+template <typename ExpectedPixelType, typename ObservedPixelType>
 bool check_result(ExpectedPixelType expected_pixel,
                   ObservedPixelType observed_pixel,
                   const char*       label,
@@ -1785,10 +1844,12 @@ bool check_result(ExpectedPixelType expected_pixel,
                   int               column,
                   bool              logIncorrect = false,
                   bool              logCorrect = false) {
-    const float4 expected_float = pixel_traits<float4>::translate(expected_pixel);
-    const float4 observed_float = pixel_traits<float4>::translate(observed_pixel);
+    typedef typename pixel_promotion<ExpectedPixelType,ObservedPixelType>::promotion_type promotion_type;
 
-    const bool pixel_is_correct = (observed_float == expected_float);
+    auto expected = pixel_traits<promotion_type>::translate(expected_pixel);
+    auto observed = pixel_traits<promotion_type>::translate(observed_pixel);
+
+    const bool pixel_is_correct = (observed == expected);
     if (pixel_is_correct) {
         if (logCorrect) {
             LOGE("%s:  CORRECT pixel{row:%d, col%d}", label, row, column);
@@ -1796,10 +1857,13 @@ bool check_result(ExpectedPixelType expected_pixel,
     }
     else {
         if (logIncorrect) {
+            const float4 log_expected = pixel_traits<float4>::translate(expected_pixel);
+            const float4 log_observed = pixel_traits<float4>::translate(observed_pixel);
+
             LOGE("%s: INCORRECT pixel{row:%d, col%d} expected{x=%f, y=%f, z=%f, w=%f} observed{x=%f, y=%f, z=%f, w=%f}",
                  label, row, column,
-                 expected_float.x, expected_float.y, expected_float.z, expected_float.w,
-                 observed_float.x, observed_float.y, observed_float.z, observed_float.w);
+                 log_expected.x, log_expected.y, log_expected.z, log_expected.w,
+                 log_observed.x, log_observed.y, log_observed.z, log_observed.w);
         }
     }
 
@@ -1951,10 +2015,10 @@ bool test_fill_kernel(const sample_info&            info,
 /* ============================================================================================== */
 
 template <typename BufferPixelType, typename ImagePixelType>
-bool test_copytofromimage_kernels(const sample_info&            info,
-                                  const std::vector<VkSampler>& samplers,
-                                  bool                          logIncorrect = false,
-                                  bool                          logCorrect = false) {
+bool test_copytoimage_kernel(const sample_info&            info,
+                             const std::vector<VkSampler>& samplers,
+                             bool                          logIncorrect = false,
+                             bool                          logCorrect = false) {
     std::string typeLabel = pixel_traits<BufferPixelType>::type_name;
     typeLabel += '-';
     typeLabel += pixel_traits<ImagePixelType>::type_name;
@@ -1966,21 +2030,20 @@ bool test_copytofromimage_kernels(const sample_info&            info,
 
     // allocate buffers and images
     buffer  src_buffer(info, buffer_size);
-    buffer  dst_buffer(info, buffer_size);
     image   dstImage(info, buffer_width, buffer_height, pixel_traits<ImagePixelType>::vk_pixel_type);
 
     // initialize source and destination buffers
     {
-        const BufferPixelType src_value = pixel_traits<BufferPixelType>::translate((float4){ 0.2f, 0.4f, 0.8f, 1.0f });
+        auto src_value = pixel_traits<BufferPixelType>::translate((float4){ 0.2f, 0.4f, 0.8f, 1.0f });
         memory_map src_map(src_buffer);
-        auto src_data = static_cast<BufferPixelType*>(src_map.data);
+        auto src_data = static_cast<decltype(src_value)*>(src_map.data);
         std::fill(src_data, src_data + (buffer_width * buffer_height), src_value);
     }
 
     {
-        const BufferPixelType dst_value = pixel_traits<BufferPixelType>::translate((float4){ 0.1f, 0.3f, 0.5f, 0.7f });
-        memory_map dst_map(dst_buffer);
-        auto dst_data = static_cast<BufferPixelType*>(dst_map.data);
+        auto dst_value = pixel_traits<ImagePixelType>::translate((float4){ 0.1f, 0.3f, 0.5f, 0.7f });
+        memory_map dst_map(dstImage);
+        auto dst_data = static_cast<decltype(dst_value)*>(dst_map.data);
         std::fill(dst_data, dst_data + (buffer_width * buffer_height), dst_value);
     }
 
@@ -2006,9 +2069,50 @@ bool test_copytofromimage_kernels(const sample_info&            info,
                                                                  logIncorrect,
                                                                  logCorrect);
 
+    dstImage.reset();
+    src_buffer.reset();
+
+    return result;
+}
+
+/* ============================================================================================== */
+
+template <typename BufferPixelType, typename ImagePixelType>
+bool test_copyfromimage_kernel(const sample_info&            info,
+                               const std::vector<VkSampler>& samplers,
+                               bool                          logIncorrect = false,
+                               bool                          logCorrect = false) {
+    std::string typeLabel = pixel_traits<BufferPixelType>::type_name;
+    typeLabel += '-';
+    typeLabel += pixel_traits<ImagePixelType>::type_name;
+
+    const int buffer_height = 64;
+    const int buffer_width = 64;
+
+    const std::size_t buffer_size = buffer_width * buffer_height * sizeof(BufferPixelType);
+
+    // allocate buffers and images
+    buffer  dst_buffer(info, buffer_size);
+    image   srcImage(info, buffer_width, buffer_height, pixel_traits<ImagePixelType>::vk_pixel_type);
+
+    // initialize source and destination buffers
+    {
+        auto src_value = pixel_traits<ImagePixelType>::translate((float4){ 0.2f, 0.4f, 0.8f, 1.0f });
+        memory_map src_map(srcImage);
+        auto src_data = static_cast<decltype(src_value)*>(src_map.data);
+        std::fill(src_data, src_data + (buffer_width * buffer_height), src_value);
+    }
+
+    {
+        auto dst_value = pixel_traits<BufferPixelType>::translate((float4){ 0.1f, 0.3f, 0.5f, 0.7f });
+        memory_map dst_map(dst_buffer);
+        auto dst_data = static_cast<decltype(dst_value)*>(dst_map.data);
+        std::fill(dst_data, dst_data + (buffer_width * buffer_height), dst_value);
+    }
+
     run_copyimagetobuffer_kernel(info,
                                  samplers,
-                                 dstImage.view,
+                                 srcImage.view,
                                  dst_buffer.buf,
                                  0,
                                  buffer_width,
@@ -2018,19 +2122,17 @@ bool test_copytofromimage_kernels(const sample_info&            info,
                                  buffer_width,
                                  buffer_height);
 
-    testLabel = "memory.spv/CopyImageToBufferKernel/";
+    std::string testLabel = "memory.spv/CopyImageToBufferKernel/";
     testLabel += typeLabel;
-    result = check_results<BufferPixelType, BufferPixelType>(src_buffer.mem, dst_buffer.mem,
-                                                             buffer_width, buffer_height,
-                                                             buffer_height,
-                                                             testLabel.c_str(),
-                                                             logIncorrect,
-                                                             logCorrect)
-             && result;
+    const bool result = check_results<ImagePixelType, BufferPixelType>(srcImage.mem, dst_buffer.mem,
+                                                                       buffer_width, buffer_height,
+                                                                       buffer_height,
+                                                                       testLabel.c_str(),
+                                                                       logIncorrect,
+                                                                       logCorrect);
 
-    dstImage.reset();
+    srcImage.reset();
     dst_buffer.reset();
-    src_buffer.reset();
 
     return result;
 }
@@ -2080,14 +2182,22 @@ int sample_main(int argc, char *argv[]) {
             test_fill_kernel<float4>,
             test_fill_kernel<half4>,
 
-            test_copytofromimage_kernels<uchar,float4>,
-            test_copytofromimage_kernels<uchar4,float4>,
-            test_copytofromimage_kernels<half,float4>,
-            test_copytofromimage_kernels<half4,float4>,
-            test_copytofromimage_kernels<float,float4>,
-            test_copytofromimage_kernels<float2,float4>,
-            test_copytofromimage_kernels<float4,float4>,
+            test_copytoimage_kernel<uchar,float4>,
+            test_copytoimage_kernel<uchar4,float4>,
+            test_copytoimage_kernel<half,float4>,
+            test_copytoimage_kernel<half4,float4>,
+            test_copytoimage_kernel<float,float4>,
+            test_copytoimage_kernel<float2,float4>,
+            test_copytoimage_kernel<float4,float4>,
 
+            test_copyfromimage_kernel<uchar,float4>,
+            test_copyfromimage_kernel<uchar4,float4>,
+            test_copyfromimage_kernel<half,float4>,
+            test_copyfromimage_kernel<half4,float4>,
+            test_copyfromimage_kernel<float,float4>,
+            test_copyfromimage_kernel<float2,float4>,
+            test_copyfromimage_kernel<float4,float4>,
+/*
             test_copytofromimage_kernels<uchar,half4>,
             test_copytofromimage_kernels<uchar4,half4>,
             test_copytofromimage_kernels<half,half4>,
@@ -2095,6 +2205,7 @@ int sample_main(int argc, char *argv[]) {
             test_copytofromimage_kernels<float,half4>,
             test_copytofromimage_kernels<float2,half4>,
             test_copytofromimage_kernels<float4,half4>
+            */
     };
 
     for (auto t : tests) {
