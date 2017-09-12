@@ -2010,6 +2010,14 @@ struct pixel_comparator<half> {
     }
 };
 
+template <>
+struct pixel_comparator<uchar> {
+    static bool is_equal(uchar l, uchar r) {
+        return pixel_comparator<float>::is_equal(pixel_traits<float>::translate(l),
+                                                 pixel_traits<float>::translate(r));
+    }
+};
+
 template <typename T>
 struct pixel_comparator< vec2<T> > {
     static bool is_equal(const vec2<T>& l, const vec2<T>& r) {
@@ -2413,6 +2421,14 @@ int sample_main(int argc, char *argv[]) {
             test_copyfromimage_kernel<float,half4>,
             test_copyfromimage_kernel<float2,half4>,
             test_copyfromimage_kernel<float4,half4>,
+
+            test_copytoimage_kernel<uchar,uchar4>,
+            test_copytoimage_kernel<uchar4,uchar4>,
+            test_copytoimage_kernel<half,uchar4>,
+            test_copytoimage_kernel<half4,uchar4>,
+            test_copytoimage_kernel<float,uchar4>,
+            test_copytoimage_kernel<float2,uchar4>,
+            test_copytoimage_kernel<float4,uchar4>,
     };
 
     for (auto t : tests) {
