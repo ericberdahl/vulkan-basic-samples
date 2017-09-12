@@ -400,12 +400,14 @@ struct pixel_traits<float> {
         return (pixel / (float) std::numeric_limits<uchar>::max());
     }
 
-    static float translate(const float2& pixel) {
-        return pixel.x;
+    template <typename T>
+    static float translate(const vec2<T>& pixel) {
+        return translate(pixel.x);
     }
 
-    static float translate(const float4& pixel) {
-        return pixel.x;
+    template <typename T>
+    static float translate(const vec4<T>& pixel) {
+        return translate(pixel.x);
     }
 };
 
@@ -421,16 +423,24 @@ struct pixel_traits<float2> {
     static const VkFormat vk_pixel_type = VK_FORMAT_R32G32_SFLOAT;
 
     template <typename T>
+    static float2 translate(const vec4<T>& pixel) {
+        return translate((vec2<T>){ pixel.x, pixel.y });
+    }
+
+    template <typename T>
     static float2 translate(const vec2<T>& pixel) {
         return {
-                pixel_traits<float>::translate(pixel.x),
-                pixel_traits<float>::translate(pixel.y)
+                pixel_traits<component_t>::translate(pixel.x),
+                pixel_traits<component_t>::translate(pixel.y)
         };
     }
 
     template <typename T>
-    static float2 translate(const vec4<T>& pixel) {
-        return translate((vec2<T>){ pixel.x, pixel.y });
+    static float2 translate(T pixel) {
+        return {
+                pixel_traits<component_t>::translate(pixel),
+                component_t(0)
+        };
     }
 };
 
@@ -449,30 +459,30 @@ struct pixel_traits<float4> {
     template <typename T>
     static float4 translate(const vec4<T>& pixel) {
         return {
-                pixel_traits<float>::translate(pixel.x),
-                pixel_traits<float>::translate(pixel.y),
-                pixel_traits<float>::translate(pixel.z),
-                pixel_traits<float>::translate(pixel.w)
+                pixel_traits<component_t>::translate(pixel.x),
+                pixel_traits<component_t>::translate(pixel.y),
+                pixel_traits<component_t>::translate(pixel.z),
+                pixel_traits<component_t>::translate(pixel.w)
         };
     }
 
     template <typename T>
     static float4 translate(const vec2<T>& pixel) {
         return {
-                pixel_traits<float>::translate(pixel.x),
-                pixel_traits<float>::translate(pixel.y),
-                0.0f,
-                0.0f
+                pixel_traits<component_t>::translate(pixel.x),
+                pixel_traits<component_t>::translate(pixel.y),
+                component_t(0),
+                component_t(0)
         };
     }
 
     template <typename T>
     static float4 translate(T pixel) {
         return {
-                pixel_traits<float>::translate(pixel),
-                0.0f,
-                0.0f,
-                0.0f
+                pixel_traits<component_t>::translate(pixel),
+                component_t(0),
+                component_t(0),
+                component_t(0)
         };
     }
 };
@@ -497,12 +507,12 @@ struct pixel_traits<half> {
     }
 
     template <typename T>
-    static half translate(const vec4<T>& pixel) {
+    static half translate(const vec2<T>& pixel) {
         return translate(pixel.x);
     }
 
     template <typename T>
-    static half translate(const vec2<T>& pixel) {
+    static half translate(const vec4<T>& pixel) {
         return translate(pixel.x);
     }
 };
@@ -518,21 +528,24 @@ struct pixel_traits<half2> {
     static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static const VkFormat vk_pixel_type = VK_FORMAT_R16G16_SFLOAT;
 
-    static half2 translate(const half2& pixel) { return pixel; }
+    template <typename T>
+    static half2 translate(const vec4<T>& pixel) {
+        return translate((vec2<T>){ pixel.x, pixel.y });
+    }
 
-    static half2 translate(const half4& pixel) { return { pixel.x, pixel.y }; }
-
-    static half2 translate(const float4& pixel) {
+    template <typename T>
+    static half2 translate(const vec2<T>& pixel) {
         return {
-                half(pixel.x),
-                half(pixel.y)
+                pixel_traits<component_t>::translate(pixel.x),
+                pixel_traits<component_t>::translate(pixel.y)
         };
     }
 
-    static half2 translate(const float2& pixel) {
+    template <typename T>
+    static half2 translate(T pixel) {
         return {
-                half(pixel.x),
-                half(pixel.y)
+                pixel_traits<component_t>::translate(pixel),
+                component_t(0)
         };
     }
 };
@@ -552,30 +565,30 @@ struct pixel_traits<half4> {
     template <typename T>
     static half4 translate(const vec4<T>& pixel) {
         return {
-                pixel_traits<half>::translate(pixel.x),
-                pixel_traits<half>::translate(pixel.y),
-                pixel_traits<half>::translate(pixel.z),
-                pixel_traits<half>::translate(pixel.w)
+                pixel_traits<component_t>::translate(pixel.x),
+                pixel_traits<component_t>::translate(pixel.y),
+                pixel_traits<component_t>::translate(pixel.z),
+                pixel_traits<component_t>::translate(pixel.w)
         };
     }
 
     template <typename T>
     static half4 translate(const vec2<T>& pixel) {
         return {
-                pixel_traits<half>::translate(pixel.x),
-                pixel_traits<half>::translate(pixel.y),
-                0.0f,
-                0.0f
+                pixel_traits<component_t>::translate(pixel.x),
+                pixel_traits<component_t>::translate(pixel.y),
+                component_t(0),
+                component_t(0)
         };
     }
 
     template <typename T>
     static half4 translate(T pixel) {
         return {
-                pixel_traits<half>::translate(pixel),
-                0.0f,
-                0.0f,
-                0.0f
+                pixel_traits<component_t>::translate(pixel),
+                component_t(0),
+                component_t(0),
+                component_t(0)
         };
     }
 };
@@ -591,11 +604,21 @@ struct pixel_traits<ushort> {
     static const int cl_pixel_type = CL_UNSIGNED_INT16;
     static const VkFormat vk_pixel_type = VK_FORMAT_R16_UINT;
 
-    static ushort translate(const float4& pixel) {
-        return (ushort) (pixel.x * std::numeric_limits<ushort>::max());
+    static ushort translate(float pixel) {
+        return (ushort) (pixel * std::numeric_limits<ushort>::max());
     }
 
     static ushort translate(ushort pixel) { return pixel; }
+
+    template <typename T>
+    static ushort translate(const vec2<T>& pixel) {
+        return translate(pixel.x);
+    }
+
+    template <typename T>
+    static ushort translate(const vec4<T>& pixel) {
+        return translate(pixel.x);
+    }
 };
 
 template <>
@@ -609,14 +632,26 @@ struct pixel_traits<ushort2> {
     static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static const VkFormat vk_pixel_type = VK_FORMAT_R16G16_UINT;
 
-    static ushort2 translate(const float4& pixel) {
+    template <typename T>
+    static ushort2 translate(const vec4<T>& pixel) {
+        return translate((vec2<T>){ pixel.x, pixel.y });
+    }
+
+    template <typename T>
+    static ushort2 translate(const vec2<T>& pixel) {
         return {
-                (ushort) (pixel.x * std::numeric_limits<ushort>::max()),
-                (ushort) (pixel.y * std::numeric_limits<ushort>::max())
+                pixel_traits<component_t>::translate(pixel.x),
+                pixel_traits<component_t>::translate(pixel.y)
         };
     }
 
-    static ushort2 translate(const ushort2& pixel) { return pixel; }
+    template <typename T>
+    static ushort2 translate(T pixel) {
+        return {
+                pixel_traits<component_t>::translate(pixel),
+                0
+        };
+    }
 };
 
 template <>
@@ -630,16 +665,35 @@ struct pixel_traits<ushort4> {
     static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static const VkFormat vk_pixel_type = VK_FORMAT_R16G16B16A16_UINT;
 
-    static ushort4 translate(const float4& pixel) {
+    template <typename T>
+    static ushort4 translate(const vec4<T>& pixel) {
         return {
-                (ushort) (pixel.x * std::numeric_limits<ushort>::max()),
-                (ushort) (pixel.y * std::numeric_limits<ushort>::max()),
-                (ushort) (pixel.z * std::numeric_limits<ushort>::max()),
-                (ushort) (pixel.w * std::numeric_limits<ushort>::max())
+                pixel_traits<component_t>::translate(pixel.x),
+                pixel_traits<component_t>::translate(pixel.y),
+                pixel_traits<component_t>::translate(pixel.z),
+                pixel_traits<component_t>::translate(pixel.w)
         };
     }
 
-    static ushort4 translate(const ushort4& pixel) { return pixel; }
+    template <typename T>
+    static ushort4 translate(const vec2<T>& pixel) {
+        return {
+                pixel_traits<component_t>::translate(pixel.x),
+                pixel_traits<component_t>::translate(pixel.y),
+                0,
+                0
+        };
+    }
+
+    template <typename T>
+    static ushort4 translate(T pixel) {
+        return {
+                pixel_traits<component_t>::translate(pixel),
+                0,
+                0,
+                0
+        };
+    }
 };
 
 template <>
@@ -664,12 +718,12 @@ struct pixel_traits<uchar> {
     static uchar translate(uchar pixel) { return pixel; }
 
     template <typename T>
-    static uchar translate(const vec4<T>& pixel) {
+    static uchar translate(const vec2<T>& pixel) {
         return translate(pixel.x);
     }
 
     template <typename T>
-    static uchar translate(const vec2<T>& pixel) {
+    static uchar translate(const vec4<T>& pixel) {
         return translate(pixel.x);
     }
 };
@@ -685,14 +739,26 @@ struct pixel_traits<uchar2> {
     static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static const VkFormat vk_pixel_type = VK_FORMAT_R8G8_UNORM;
 
-    static uchar2 translate(const float4& pixel) {
+    template <typename T>
+    static uchar2 translate(const vec4<T>& pixel) {
+        return translate((vec2<T>){ pixel.x, pixel.y });
+    }
+
+    template <typename T>
+    static uchar2 translate(const vec2<T>& pixel) {
         return {
-                (uchar) (pixel.x * std::numeric_limits<uchar>::max()),
-                (uchar) (pixel.y * std::numeric_limits<uchar>::max())
+                pixel_traits<component_t>::translate(pixel.x),
+                pixel_traits<component_t>::translate(pixel.y)
         };
     }
 
-    static uchar2 translate(const uchar2& pixel) { return pixel; }
+    template <typename T>
+    static uchar2 translate(T pixel) {
+        return {
+                pixel_traits<component_t>::translate(pixel),
+                0
+        };
+    }
 };
 
 template <>
@@ -706,25 +772,35 @@ struct pixel_traits<uchar4> {
     static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static const VkFormat vk_pixel_type = VK_FORMAT_R8G8B8A8_UNORM;
 
-    static uchar4 translate(const float4& pixel) {
+    template <typename T>
+    static uchar4 translate(const vec4<T>& pixel) {
         return {
-                (uchar) (pixel.x * std::numeric_limits<uchar>::max()),
-                (uchar) (pixel.y * std::numeric_limits<uchar>::max()),
-                (uchar) (pixel.z * std::numeric_limits<uchar>::max()),
-                (uchar) (pixel.w * std::numeric_limits<uchar>::max())
+                pixel_traits<component_t>::translate(pixel.x),
+                pixel_traits<component_t>::translate(pixel.y),
+                pixel_traits<component_t>::translate(pixel.z),
+                pixel_traits<component_t>::translate(pixel.w)
         };
     }
 
-    static uchar4 translate(const half4& pixel) {
+    template <typename T>
+    static uchar4 translate(const vec2<T>& pixel) {
         return {
-                (uchar) (pixel.x * std::numeric_limits<half>::max()),
-                (uchar) (pixel.y * std::numeric_limits<half>::max()),
-                (uchar) (pixel.z * std::numeric_limits<half>::max()),
-                (uchar) (pixel.w * std::numeric_limits<half>::max())
+                pixel_traits<component_t>::translate(pixel.x),
+                pixel_traits<component_t>::translate(pixel.y),
+                0,
+                0
         };
     }
 
-    static uchar4 translate(const uchar4& pixel) { return pixel; }
+    template <typename T>
+    static uchar4 translate(T pixel) {
+        return {
+                pixel_traits<component_t>::translate(pixel),
+                0,
+                0,
+                0
+        };
+    }
 };
 
 class kernel_invocation {
