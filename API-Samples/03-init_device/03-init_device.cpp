@@ -2404,7 +2404,15 @@ int sample_main(int argc, char *argv[]) {
             test_copytoimage_kernel<half4,half4>,
             test_copytoimage_kernel<float,half4>,
             test_copytoimage_kernel<float2,half4>,
-            test_copytoimage_kernel<float4,half4>
+            test_copytoimage_kernel<float4,half4>,
+
+            test_copyfromimage_kernel<uchar,half4>,
+            test_copyfromimage_kernel<uchar4,half4>,
+            test_copyfromimage_kernel<half,half4>,
+            test_copyfromimage_kernel<half4,half4>,
+            test_copyfromimage_kernel<float,half4>,
+            test_copyfromimage_kernel<float2,half4>,
+            test_copyfromimage_kernel<float4,half4>,
     };
 
     for (auto t : tests) {
