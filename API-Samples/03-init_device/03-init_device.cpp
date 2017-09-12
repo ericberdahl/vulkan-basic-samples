@@ -2442,6 +2442,22 @@ int sample_main(int argc, char *argv[]) {
             test_copyfromimage_series<float4>,
             test_copyfromimage_series<half4>,
             test_copyfromimage_series<uchar4>,
+
+            test_copytoimage_series<float2>,
+            test_copytoimage_series<half2>,
+            test_copytoimage_series<uchar2>,
+
+            test_copyfromimage_series<float2>,
+            test_copyfromimage_series<half2>,
+            test_copyfromimage_series<uchar2>,
+
+            test_copytoimage_series<float>,
+            test_copytoimage_series<half>,
+            test_copytoimage_series<uchar>,
+
+            test_copyfromimage_series<float>,
+            test_copyfromimage_series<half>,
+            test_copyfromimage_series<uchar>,
     };
 
     for (auto t : tests) {
