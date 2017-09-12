@@ -106,6 +106,14 @@ enum {
 
 /* ============================================================================================== */
 
+std::pair<int,int> operator+=(std::pair<int,int>& l, const std::pair<int,int>& r) {
+    l.first += r.first;
+    l.second += r.second;
+    return l;
+};
+
+/* ============================================================================================== */
+
 struct pipeline_layout {
     pipeline_layout() : device(VK_NULL_HANDLE), descriptors(), pipeline(VK_NULL_HANDLE) {};
 
@@ -2174,10 +2182,10 @@ bool check_results(const device_memory& observed,
 /* ============================================================================================== */
 
 template <typename PixelType>
-bool test_fill_kernel(const sample_info&            info,
-                      const std::vector<VkSampler>& samplers,
-                      bool                          logIncorrect = false,
-                      bool                          logCorrect = false) {
+std::pair<int,int> test_fill_kernel(const sample_info&            info,
+                                    const std::vector<VkSampler>& samplers,
+                                    bool                          logIncorrect = false,
+                                    bool                          logCorrect = false) {
     const std::string typeLabel = pixel_traits<PixelType>::type_name;
 
     const int buffer_height = 64;
@@ -2207,26 +2215,26 @@ bool test_fill_kernel(const sample_info&            info,
 
     std::string testLabel = "fills.spv/FillWithColorKernel/";
     testLabel += typeLabel;
-    const bool result = check_results<PixelType>(dst_buffer.mem,
-                                                 buffer_width, buffer_height,
-                                                 buffer_width,
-                                                 color,
-                                                 testLabel.c_str(),
-                                                 logIncorrect,
-                                                 logCorrect);
+    const bool success = check_results<PixelType>(dst_buffer.mem,
+                                                  buffer_width, buffer_height,
+                                                  buffer_width,
+                                                  color,
+                                                  testLabel.c_str(),
+                                                  logIncorrect,
+                                                  logCorrect);
 
     dst_buffer.reset();
 
-    return result;
+    return (success ? std::make_pair(1, 0) : std::make_pair(0, 1));
 }
 
 /* ============================================================================================== */
 
 template <typename BufferPixelType, typename ImagePixelType>
-bool test_copytoimage_kernel(const sample_info&            info,
-                             const std::vector<VkSampler>& samplers,
-                             bool                          logIncorrect = false,
-                             bool                          logCorrect = false) {
+std::pair<int,int> test_copytoimage_kernel(const sample_info&            info,
+                                           const std::vector<VkSampler>& samplers,
+                                           bool                          logIncorrect = false,
+                                           bool                          logCorrect = false) {
     std::string typeLabel = pixel_traits<BufferPixelType>::type_name;
     typeLabel += '-';
     typeLabel += pixel_traits<ImagePixelType>::type_name;
@@ -2270,26 +2278,44 @@ bool test_copytoimage_kernel(const sample_info&            info,
 
     std::string testLabel = "memory.spv/CopyBufferToImageKernel/";
     testLabel += typeLabel;
-    bool result = check_results<BufferPixelType, ImagePixelType>(src_buffer.mem, dstImage.mem,
-                                                                 buffer_width, buffer_height,
-                                                                 buffer_height,
-                                                                 testLabel.c_str(),
-                                                                 logIncorrect,
-                                                                 logCorrect);
+    const bool success = check_results<BufferPixelType, ImagePixelType>(src_buffer.mem, dstImage.mem,
+                                                                        buffer_width, buffer_height,
+                                                                        buffer_height,
+                                                                        testLabel.c_str(),
+                                                                        logIncorrect,
+                                                                        logCorrect);
 
     dstImage.reset();
     src_buffer.reset();
 
-    return result;
+    return (success ? std::make_pair(1, 0) : std::make_pair(0, 1));
+}
+
+template <typename ImagePixelType>
+std::pair<int,int> test_copytoimage_series(const sample_info&            info,
+                                           const std::vector<VkSampler>& samplers,
+                                           bool                          logIncorrect = false,
+                                           bool                          logCorrect = false) {
+    std::pair<int,int> results(0, 0);
+
+    results += test_copytoimage_kernel<uchar,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
+    results += test_copytoimage_kernel<uchar4,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
+    results += test_copytoimage_kernel<half,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
+    results += test_copytoimage_kernel<half4,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
+    results += test_copytoimage_kernel<float,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
+    results += test_copytoimage_kernel<float2,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
+    results += test_copytoimage_kernel<float4,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
+
+    return results;
 }
 
 /* ============================================================================================== */
 
 template <typename BufferPixelType, typename ImagePixelType>
-bool test_copyfromimage_kernel(const sample_info&            info,
-                               const std::vector<VkSampler>& samplers,
-                               bool                          logIncorrect = false,
-                               bool                          logCorrect = false) {
+std::pair<int,int> test_copyfromimage_kernel(const sample_info&            info,
+                                             const std::vector<VkSampler>& samplers,
+                                             bool                          logIncorrect = false,
+                                             bool                          logCorrect = false) {
     std::string typeLabel = pixel_traits<BufferPixelType>::type_name;
     typeLabel += '-';
     typeLabel += pixel_traits<ImagePixelType>::type_name;
@@ -2332,22 +2358,41 @@ bool test_copyfromimage_kernel(const sample_info&            info,
 
     std::string testLabel = "memory.spv/CopyImageToBufferKernel/";
     testLabel += typeLabel;
-    const bool result = check_results<ImagePixelType, BufferPixelType>(srcImage.mem, dst_buffer.mem,
-                                                                       buffer_width, buffer_height,
-                                                                       buffer_height,
-                                                                       testLabel.c_str(),
-                                                                       logIncorrect,
-                                                                       logCorrect);
+    const bool success = check_results<ImagePixelType, BufferPixelType>(srcImage.mem, dst_buffer.mem,
+                                                                        buffer_width, buffer_height,
+                                                                        buffer_height,
+                                                                        testLabel.c_str(),
+                                                                        logIncorrect,
+                                                                        logCorrect);
 
     srcImage.reset();
     dst_buffer.reset();
 
-    return result;
+    return (success ? std::make_pair(1, 0) : std::make_pair(0, 1));
 }
+
+template <typename ImagePixelType>
+std::pair<int,int> test_copyfromimage_series(const sample_info&            info,
+                                             const std::vector<VkSampler>& samplers,
+                                             bool                          logIncorrect = false,
+                                             bool                          logCorrect = false) {
+    std::pair<int,int> results(0, 0);
+
+    results += test_copyfromimage_kernel<uchar,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
+    results += test_copyfromimage_kernel<uchar4,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
+    results += test_copyfromimage_kernel<half,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
+    results += test_copyfromimage_kernel<half4,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
+    results += test_copyfromimage_kernel<float,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
+    results += test_copyfromimage_kernel<float2,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
+    results += test_copyfromimage_kernel<float4,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
+
+    return results;
+}
+
 
 /* ============================================================================================== */
 
-typedef bool (*test_fn_t)(const sample_info&, const std::vector<VkSampler>&, bool, bool);
+typedef std::pair<int,int> (*test_fn_t)(const sample_info&, const std::vector<VkSampler>&, bool, bool);
 
 int sample_main(int argc, char *argv[]) {
     struct sample_info info = {};
@@ -2384,59 +2429,24 @@ int sample_main(int argc, char *argv[]) {
                    std::back_inserter(samplers),
                    std::bind(create_compatible_sampler, info.device, std::placeholders::_1));
 
-    unsigned int num_successes = 0;
+    std::pair<int,int> test_results(0, 0);
 
     const test_fn_t tests[] = {
             test_fill_kernel<float4>,
             test_fill_kernel<half4>,
 
-            test_copytoimage_kernel<uchar,float4>,
-            test_copytoimage_kernel<uchar4,float4>,
-            test_copytoimage_kernel<half,float4>,
-            test_copytoimage_kernel<half4,float4>,
-            test_copytoimage_kernel<float,float4>,
-            test_copytoimage_kernel<float2,float4>,
-            test_copytoimage_kernel<float4,float4>,
+            test_copytoimage_series<float4>,
+            test_copytoimage_series<half4>,
+            test_copytoimage_series<uchar4>,
 
-            test_copyfromimage_kernel<uchar,float4>,
-            test_copyfromimage_kernel<uchar4,float4>,
-            test_copyfromimage_kernel<half,float4>,
-            test_copyfromimage_kernel<half4,float4>,
-            test_copyfromimage_kernel<float,float4>,
-            test_copyfromimage_kernel<float2,float4>,
-            test_copyfromimage_kernel<float4,float4>,
-
-            test_copytoimage_kernel<uchar,half4>,
-            test_copytoimage_kernel<uchar4,half4>,
-            test_copytoimage_kernel<half,half4>,
-            test_copytoimage_kernel<half4,half4>,
-            test_copytoimage_kernel<float,half4>,
-            test_copytoimage_kernel<float2,half4>,
-            test_copytoimage_kernel<float4,half4>,
-
-            test_copyfromimage_kernel<uchar,half4>,
-            test_copyfromimage_kernel<uchar4,half4>,
-            test_copyfromimage_kernel<half,half4>,
-            test_copyfromimage_kernel<half4,half4>,
-            test_copyfromimage_kernel<float,half4>,
-            test_copyfromimage_kernel<float2,half4>,
-            test_copyfromimage_kernel<float4,half4>,
-
-            test_copytoimage_kernel<uchar,uchar4>,
-            test_copytoimage_kernel<uchar4,uchar4>,
-            test_copytoimage_kernel<half,uchar4>,
-            test_copytoimage_kernel<half4,uchar4>,
-            test_copytoimage_kernel<float,uchar4>,
-            test_copytoimage_kernel<float2,uchar4>,
-            test_copytoimage_kernel<float4,uchar4>,
+            test_copyfromimage_series<float4>,
+            test_copyfromimage_series<half4>,
+            test_copyfromimage_series<uchar4>,
     };
 
     for (auto t : tests) {
-        num_successes += t(info, samplers, false, false);
+        test_results += t(info, samplers, false, false);
     }
-
-    const int num_tests = sizeof(tests) / sizeof(tests[0]);
-    const int num_failures = num_tests - num_successes;
 
     //
     // Clean up
@@ -2453,7 +2463,7 @@ int sample_main(int argc, char *argv[]) {
     destroy_device(info);
     destroy_instance(info);
 
-    LOGI("Complete! %d tests passed. %d tests failed", num_successes, num_failures);
+    LOGI("Complete! %d tests passed. %d tests failed", test_results.first, test_results.second);
 
     return 0;
 }
