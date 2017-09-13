@@ -1979,6 +1979,44 @@ void run_copyimagetobuffer_kernel(const sample_info& info,
     invocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
 }
 
+std::tuple<int,int,int> run_localsize_kernel(const sample_info&             info,
+                                             const std::vector<VkSampler>&  samplers) {
+    struct scalar_args {
+        int outWorkgroupX;  // offset 0
+        int outWorkgroupY;  // offset 4
+        int outWorkgroupZ;  // offset 8
+    };
+    static_assert(0 == offsetof(scalar_args, outWorkgroupX), "outWorkgroupX offset incorrect");
+    static_assert(4 == offsetof(scalar_args, outWorkgroupY), "outWorkgroupY offset incorrect");
+    static_assert(8 == offsetof(scalar_args, outWorkgroupZ), "outWorkgroupZ offset incorrect");
+
+    buffer outArgs(info, sizeof(scalar_args));
+
+    // The localsize kernel needs only a single workgroup with a single workitem
+    const auto workgroup_sizes = std::make_tuple(1, 1);
+    const auto num_workgroups = std::make_tuple(1, 1);
+
+    kernel_invocation invocation(info.device,
+                                 info.cmd_pool,
+                                 info.desc_pool,
+                                 info.memory_properties,
+                                 "localsize.spv", "main",
+                                 "localsize.spvmap", "main");
+
+    invocation.addLiteralSamplers(samplers.begin(), samplers.end());
+    invocation.addBufferArgument(outArgs.buf);
+
+    invocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
+
+    memory_map argMap(outArgs);
+    auto outScalars = static_cast<const scalar_args*>(argMap.data);
+
+    const auto result = std::make_tuple(outScalars->outWorkgroupX,
+                                        outScalars->outWorkgroupY,
+                                        outScalars->outWorkgroupZ);
+    return result;
+}
+
 /* ============================================================================================== */
 
 template <typename ExpectedPixelType, typename ObservedPixelType>
@@ -2428,6 +2466,10 @@ int sample_main(int argc, char *argv[]) {
     std::transform(std::begin(sampler_flags), std::end(sampler_flags),
                    std::back_inserter(samplers),
                    std::bind(create_compatible_sampler, info.device, std::placeholders::_1));
+
+#if 1
+    const auto localsizes = run_localsize_kernel(info, samplers);
+#endif
 
     std::pair<int,int> test_results(0, 0);
 
