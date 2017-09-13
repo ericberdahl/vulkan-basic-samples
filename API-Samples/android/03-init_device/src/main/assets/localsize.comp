@@ -1,0 +1,16 @@
+#version 430
+
+layout (local_size_x = 2, local_size_y = 2, local_size_z = 2) in;
+layout (local_size_x_id = 0, local_size_y_id = 1, local_size_z_id = 2) in;
+
+layout (set = 1, binding = 0) buffer datOut0 {
+	uint	workgroup_x;
+	uint	workgroup_y;
+	uint	workgroup_z;
+} outData;
+
+void main() {
+    outData.workgroup_x = gl_WorkGroupSize.x;
+    outData.workgroup_y = gl_WorkGroupSize.y;
+    outData.workgroup_z = gl_WorkGroupSize.z;
+}
