@@ -401,7 +401,7 @@ struct pixel_traits<float> {
     static float translate(const float& pixel) { return pixel; }
 
     static float translate(half pixel) {
-        return half(pixel);
+        return pixel;
     }
 
     static float translate(uchar pixel) {
