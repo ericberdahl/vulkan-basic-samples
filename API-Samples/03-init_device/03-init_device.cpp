@@ -2467,7 +2467,7 @@ int sample_main(int argc, char *argv[]) {
                    std::back_inserter(samplers),
                    std::bind(create_compatible_sampler, info.device, std::placeholders::_1));
 
-#if 1
+#if 0
     const auto localsizes = run_localsize_kernel(info, samplers);
 #endif
 
