@@ -356,9 +356,10 @@ struct spv_map {
     static arg::kind_t parse_argType(const std::string& argType);
     static spv_map   parse(std::istream& in);
 
-    spv_map() : samplers(), kernels() {};
+    spv_map() : samplers(), kernels(), samplers_desc_set(-1) {};
 
     std::vector<sampler>    samplers;
+    int                     samplers_desc_set;
     std::vector<kernel>     kernels;
 };
 
@@ -1002,6 +1003,10 @@ spv_map spv_map::parse(std::istream& in) {
                     // all samplers, if any, are documented to share descriptor set 0
                     const int ds = std::atoi(value.c_str());
                     assert(ds == 0);
+
+                    if (-1 == result.samplers_desc_set) {
+                        result.samplers_desc_set = ds;
+                    }
                 }
                 else if ("binding" == key) {
                     s->binding = std::atoi(value.c_str());
@@ -1434,7 +1439,9 @@ kernel_invocation::kernel_invocation(VkDevice           device,
     mShaderModule = create_shader(device, moduleName.c_str());
 
     mDescriptors = allocate_descriptor_set(mDevice, mDescriptorPool, mPipelineLayout);
-    mLiteralSamplerDescSet = mDescriptors[0];
+    if (-1 != shader_arg_map.samplers_desc_set) {
+        mLiteralSamplerDescSet = mDescriptors[shader_arg_map.samplers_desc_set];
+    }
     mArgumentsDescSet = mDescriptors[kernel_arg_map->descriptor_set];
 }
 
@@ -1695,7 +1702,7 @@ void kernel_invocation::updateDescriptorSets() {
 
             case VK_DESCRIPTOR_TYPE_SAMPLER:
                 argSet.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-                literalSamplerSet.pImageInfo = &(*nextImage);
+                argSet.pImageInfo = &(*nextImage);
                 ++nextImage;
                 break;
 
