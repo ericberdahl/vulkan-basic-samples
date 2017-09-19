@@ -1987,7 +1987,8 @@ void run_copyimagetobuffer_kernel(const sample_info& info,
 }
 
 std::tuple<int,int,int> run_localsize_kernel(const sample_info&             info,
-                                             const std::vector<VkSampler>&  samplers) {
+                                             const std::vector<VkSampler>&  samplers,
+                                             const kernel_invocation::WorkgroupDimensions& workgroup_sizes) {
     struct scalar_args {
         int outWorkgroupX;  // offset 0
         int outWorkgroupY;  // offset 4
@@ -2000,7 +2001,6 @@ std::tuple<int,int,int> run_localsize_kernel(const sample_info&             info
     buffer outArgs(info, sizeof(scalar_args));
 
     // The localsize kernel needs only a single workgroup with a single workitem
-    const auto workgroup_sizes = std::make_tuple(1, 1);
     const auto num_workgroups = std::make_tuple(1, 1);
 
     kernel_invocation invocation(info.device,
@@ -2010,7 +2010,6 @@ std::tuple<int,int,int> run_localsize_kernel(const sample_info&             info
                                  "localsize.spv", "main",
                                  "localsize.spvmap", "main");
 
-    invocation.addLiteralSamplers(samplers.begin(), samplers.end());
     invocation.addBufferArgument(outArgs.buf);
 
     invocation.run(info.graphics_queue, workgroup_sizes, num_workgroups);
@@ -2225,6 +2224,38 @@ bool check_results(const device_memory& observed,
 }
 
 /* ============================================================================================== */
+
+std::pair<int,int> test_localsize_kernel(const sample_info&             info,
+                                         const std::vector<VkSampler>&  samplers,
+                                         bool                           logIncorrect = false,
+                                         bool                           logCorrect = false) {
+    std::string label = "localsize.spv/ReadLocalSizes/";
+    const kernel_invocation::WorkgroupDimensions expected = std::make_pair(15, 23);
+
+    const auto observed = run_localsize_kernel(info, samplers, expected);
+
+    const bool success = (std::get<0>(expected) == std::get<0>(observed) &&
+                          std::get<1>(expected) == std::get<1>(observed) &&
+                          1 == std::get<2>(observed));
+    if (success) {
+        if (logCorrect) {
+            LOGE("%s:  CORRECT workgroup_size{x:%d, y:%d, z:%d}", label.c_str(),
+                 std::get<0>(observed), std::get<1>(observed), std::get<2>(observed));
+        }
+    }
+    else {
+        if (logIncorrect) {
+            LOGE("%s: INCORRECT workgroup_size expected{x=%d, y=%d, z=1} observed{x=%d, y=%d, z=%d}",
+                 label.c_str(),
+                 std::get<0>(expected), std::get<1>(expected),
+                 std::get<0>(observed), std::get<1>(observed), std::get<2>(observed));
+        }
+    }
+
+    LOGE("%s: %s", label.c_str(), (success ? "Correct" : "Incorrect"));
+
+    return (success ? std::make_pair(1, 0) : std::make_pair(0, 1));
+};
 
 template <typename PixelType>
 std::pair<int,int> test_fill_kernel(const sample_info&            info,
@@ -2474,13 +2505,11 @@ int sample_main(int argc, char *argv[]) {
                    std::back_inserter(samplers),
                    std::bind(create_compatible_sampler, info.device, std::placeholders::_1));
 
-#if 0
-    const auto localsizes = run_localsize_kernel(info, samplers);
-#endif
-
     std::pair<int,int> test_results(0, 0);
 
     const test_fn_t tests[] = {
+            test_localsize_kernel,
+
             test_fill_kernel<float4>,
             test_fill_kernel<half4>,
 
