@@ -2007,8 +2007,8 @@ std::tuple<int,int,int> run_localsize_kernel(const sample_info&             info
                                  info.cmd_pool,
                                  info.desc_pool,
                                  info.memory_properties,
-                                 "localsize.spv", "main",
-                                 "localsize.spvmap", "main");
+                                 "localsize.spv", "ReadLocalSize",
+                                 "localsize.spvmap", "ReadLocalSize");
 
     invocation.addBufferArgument(outArgs.buf);
 
