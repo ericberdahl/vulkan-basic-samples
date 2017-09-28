@@ -900,6 +900,22 @@ void kernel_invocation::addPodArgument(const T& pod) {
 
 /* ============================================================================================== */
 
+class vulkan_error : public std::runtime_error {
+    VkResult    mResult;
+public:
+    vulkan_error(const std::string& s, VkResult result) : runtime_error(s), mResult(result) {}
+
+    inline VkResult get_result() const { return mResult; }
+};
+
+void throwIfNotVkSuccess(VkResult result, const std::string& label) {
+    if (VK_SUCCESS != result) {
+        throw vulkan_error(label, result);
+    }
+}
+
+/* ============================================================================================== */
+
 VKAPI_ATTR VkBool32 VKAPI_CALL dbgFunc(VkDebugReportFlagsEXT msgFlags, VkDebugReportObjectTypeEXT objType, uint64_t srcObject,
                                        size_t location, int32_t msgCode, const char *pLayerPrefix, const char *pMsg,
                                        void *pUserData) {
@@ -1113,8 +1129,8 @@ void my_init_descriptor_pool(struct sample_info &info) {
     createInfo.pPoolSizes = type_count;
     createInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
 
-    VkResult U_ASSERT_ONLY res = vkCreateDescriptorPool(info.device, &createInfo, NULL, &info.desc_pool);
-    assert(res == VK_SUCCESS);
+    throwIfNotVkSuccess(vkCreateDescriptorPool(info.device, &createInfo, NULL, &info.desc_pool),
+                        "vkCreateDescriptorPool");
 }
 
 std::vector<VkDescriptorSet> allocate_descriptor_set(VkDevice device, VkDescriptorPool pool, const pipeline_layout& layout) {
@@ -1127,8 +1143,8 @@ std::vector<VkDescriptorSet> allocate_descriptor_set(VkDevice device, VkDescript
     createInfo.pSetLayouts = layout.descriptors.data();
 
     result.resize(createInfo.descriptorSetCount, VK_NULL_HANDLE);
-    VkResult U_ASSERT_ONLY res = vkAllocateDescriptorSets(device, &createInfo, result.data());
-    assert(res == VK_SUCCESS);
+    throwIfNotVkSuccess(vkAllocateDescriptorSets(device, &createInfo, result.data()),
+                        "vkAllocateDescriptorSets");
 
     return result;
 }
@@ -1156,8 +1172,8 @@ VkShaderModule create_shader(VkDevice device, const char* spvFileName) {
     shaderModuleCreateInfo.pCode = spvModule.data();
 
     VkShaderModule shaderModule = VK_NULL_HANDLE;
-    VkResult U_ASSERT_ONLY res = vkCreateShaderModule(device, &shaderModuleCreateInfo, NULL, &shaderModule);
-    assert(res == VK_SUCCESS);
+    throwIfNotVkSuccess(vkCreateShaderModule(device, &shaderModuleCreateInfo, NULL, &shaderModule),
+                        "vkCreateShaderModule");
 
     return shaderModule;
 }
@@ -1216,8 +1232,8 @@ VkSampler create_compatible_sampler(VkDevice device, int opencl_flags) {
     samplerCreateInfo.unnormalizedCoordinates = unnormalizedCoordinates;
 
     VkSampler result = VK_NULL_HANDLE;
-    VkResult U_ASSERT_ONLY res = vkCreateSampler(device, &samplerCreateInfo, NULL, &result);
-    assert(res == VK_SUCCESS);
+    throwIfNotVkSuccess(vkCreateSampler(device, &samplerCreateInfo, NULL, &result),
+                        "vkCreateSampler");
 
     return result;
 }
@@ -1230,8 +1246,8 @@ VkCommandBuffer allocate_command_buffer(VkDevice device, VkCommandPool cmd_pool)
     allocInfo.commandBufferCount = 1;
 
     VkCommandBuffer result = VK_NULL_HANDLE;
-    VkResult U_ASSERT_ONLY res = vkAllocateCommandBuffers(device, &allocInfo, &result);
-    assert(res == VK_SUCCESS);
+    throwIfNotVkSuccess(vkAllocateCommandBuffers(device, &allocInfo, &result),
+                        "vkAllocateCommandBuffers");
 
     return result;
 }
@@ -1241,8 +1257,8 @@ VkCommandBuffer allocate_command_buffer(VkDevice device, VkCommandPool cmd_pool)
 memory_map::memory_map(VkDevice device, VkDeviceMemory memory) :
         dev(device), mem(memory), data(nullptr)
 {
-    VkResult U_ASSERT_ONLY res = vkMapMemory(device, memory, 0, VK_WHOLE_SIZE, 0, &data);
-    assert(res == VK_SUCCESS);
+    throwIfNotVkSuccess(vkMapMemory(device, memory, 0, VK_WHOLE_SIZE, 0, &data),
+                        "vkMapMemory");
 }
 
 memory_map::~memory_map() {
@@ -1268,8 +1284,8 @@ void device_memory::allocate(VkDevice                                   dev,
                                                               mem_reqs.memoryTypeBits,
                                                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
     assert(alloc_info.memoryTypeIndex < std::numeric_limits<uint32_t>::max() && "No mappable, coherent memory");
-    VkResult U_ASSERT_ONLY res = vkAllocateMemory(device, &alloc_info, NULL, &mem);
-    assert(res == VK_SUCCESS);
+    throwIfNotVkSuccess(vkAllocateMemory(device, &alloc_info, NULL, &mem),
+                        "vkAllocateMemory");
 }
 
 void device_memory::reset() {
@@ -1296,8 +1312,8 @@ void buffer::allocate(VkDevice                                  dev,
     buf_info.size = inNumBytes;
     buf_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
 
-    VkResult U_ASSERT_ONLY res = vkCreateBuffer(dev, &buf_info, NULL, &buf);
-    assert(res == VK_SUCCESS);
+    throwIfNotVkSuccess(vkCreateBuffer(dev, &buf_info, NULL, &buf),
+                        "vkCreateBuffer");
 
     // Find out what we need in order to allocate memory for the buffer
     VkMemoryRequirements mem_reqs = {};
@@ -1306,8 +1322,8 @@ void buffer::allocate(VkDevice                                  dev,
     mem.allocate(dev, mem_reqs, memory_properties);
 
     // Bind the memory to the buffer object
-    res = vkBindBufferMemory(dev, buf, mem.mem, 0);
-    assert(res == VK_SUCCESS);
+    throwIfNotVkSuccess(vkBindBufferMemory(dev, buf, mem.mem, 0),
+                        "vkBindBufferMemory");
 }
 
 void buffer::reset() {
@@ -1343,8 +1359,8 @@ void image::allocate(VkDevice                                   dev,
     imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
     imageInfo.initialLayout = VK_IMAGE_LAYOUT_GENERAL;
 
-    VkResult U_ASSERT_ONLY res = vkCreateImage(dev, &imageInfo, nullptr, &im);
-    assert(res == VK_SUCCESS);
+    throwIfNotVkSuccess(vkCreateImage(dev, &imageInfo, nullptr, &im),
+                        "vkCreateImage");
 
     // Find out what we need in order to allocate memory for the image
     VkMemoryRequirements mem_reqs = {};
@@ -1353,8 +1369,8 @@ void image::allocate(VkDevice                                   dev,
     mem.allocate(dev, mem_reqs, memory_properties);
 
     // Bind the memory to the image object
-    res = vkBindImageMemory(dev, im, mem.mem, 0);
-    assert(res == VK_SUCCESS);
+    throwIfNotVkSuccess(vkBindImageMemory(dev, im, mem.mem, 0),
+                        "vkBindImageMemory");
 
     // Allocate the image view
     VkImageViewCreateInfo viewInfo = {};
@@ -1365,8 +1381,8 @@ void image::allocate(VkDevice                                   dev,
     viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
     viewInfo.subresourceRange.levelCount = 1;
 
-    res = vkCreateImageView(dev, &viewInfo, nullptr, &view);
-    assert(res == VK_SUCCESS);
+    throwIfNotVkSuccess(vkCreateImageView(dev, &viewInfo, nullptr, &view),
+                        "vkCreateImageView");
 }
 
 void image::reset() {
@@ -1519,8 +1535,8 @@ VkDescriptorSetLayout kernel_invocation::createDescriptorSetLayout(const std::ve
     createInfo.pBindings = createInfo.bindingCount ? bindingSet.data() : NULL;
 
     VkDescriptorSetLayout result = VK_NULL_HANDLE;
-    VkResult U_ASSERT_ONLY res = vkCreateDescriptorSetLayout(mDevice, &createInfo, NULL, &result);
-    assert(res == VK_SUCCESS);
+    throwIfNotVkSuccess(vkCreateDescriptorSetLayout(mDevice, &createInfo, NULL, &result),
+                        "vkCreateDescriptorSetLayout");
 
     return result;
 }
@@ -1580,8 +1596,8 @@ pipeline_layout kernel_invocation::createPipelineLayout(const spv_map& spvMap) {
     createInfo.setLayoutCount = result.descriptors.size();
     createInfo.pSetLayouts = createInfo.setLayoutCount ? result.descriptors.data() : NULL;
 
-    VkResult U_ASSERT_ONLY res = vkCreatePipelineLayout(mDevice, &createInfo, NULL, &result.pipeline);
-    assert(res == VK_SUCCESS);
+    throwIfNotVkSuccess(vkCreatePipelineLayout(mDevice, &createInfo, NULL, &result.pipeline),
+                        "vkCreatePipelineLayout");
 
     return result;
 }
@@ -1718,8 +1734,8 @@ void kernel_invocation::fillCommandBuffer(VkPipeline                    pipeline
                                           const WorkgroupDimensions&    num_workgroups) {
     VkCommandBufferBeginInfo beginInfo = {};
     beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    VkResult U_ASSERT_ONLY res = vkBeginCommandBuffer(mCommand, &beginInfo);
-    assert(res == VK_SUCCESS);
+    throwIfNotVkSuccess(vkBeginCommandBuffer(mCommand, &beginInfo),
+                        "vkBeginCommandBuffer");
 
     vkCmdBindPipeline(mCommand, VK_PIPELINE_BIND_POINT_COMPUTE, pipeline);
 
@@ -1731,8 +1747,8 @@ void kernel_invocation::fillCommandBuffer(VkPipeline                    pipeline
 
     vkCmdDispatch(mCommand, std::get<0>(num_workgroups), std::get<1>(num_workgroups), 1);
 
-    res = vkEndCommandBuffer(mCommand);
-    assert(res == VK_SUCCESS);
+    throwIfNotVkSuccess(vkEndCommandBuffer(mCommand),
+                        "vkEndCommandBuffer");
 }
 
 void kernel_invocation::submitCommand(VkQueue queue) {
@@ -1741,8 +1757,8 @@ void kernel_invocation::submitCommand(VkQueue queue) {
     submitInfo.commandBufferCount = 1;
     submitInfo.pCommandBuffers = &mCommand;
 
-    VkResult U_ASSERT_ONLY res = vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE);
-    assert(res == VK_SUCCESS);
+    throwIfNotVkSuccess(vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE),
+                        "vkQueueSubmit");
 
 }
 
@@ -1787,8 +1803,8 @@ VkPipeline kernel_invocation::createPipeline(const WorkgroupDimensions& work_gro
     createInfo.stage.pSpecializationInfo = &specializationInfo;
 
     VkPipeline result = VK_NULL_HANDLE;
-    VkResult U_ASSERT_ONLY res = vkCreateComputePipelines(mDevice, VK_NULL_HANDLE, 1, &createInfo, NULL, &result);
-    assert(res == VK_SUCCESS);
+    throwIfNotVkSuccess(vkCreateComputePipelines(mDevice, VK_NULL_HANDLE, 1, &createInfo, NULL, &result),
+                        "vkCreateComputePipelines");
 
     return result;
 }
@@ -2226,6 +2242,9 @@ std::pair<int,int> test_fill_kernel(const sample_info&            info,
                                     bool                          logCorrect = false) {
     const std::string typeLabel = pixel_traits<PixelType>::type_name;
 
+    std::string testLabel = "fills.spv/FillWithColorKernel/";
+    testLabel += typeLabel;
+
     const int buffer_height = 64;
     const int buffer_width = 64;
     const float4 color = { 0.25f, 0.50f, 0.75f, 1.0f };
@@ -2251,8 +2270,6 @@ std::pair<int,int> test_fill_kernel(const sample_info&            info,
                     buffer_width, buffer_height, // width, height
                     color); // color
 
-    std::string testLabel = "fills.spv/FillWithColorKernel/";
-    testLabel += typeLabel;
     const bool success = check_results<PixelType>(dst_buffer.mem,
                                                   buffer_width, buffer_height,
                                                   buffer_width,
@@ -2276,6 +2293,9 @@ std::pair<int,int> test_copytoimage_kernel(const sample_info&            info,
     std::string typeLabel = pixel_traits<BufferPixelType>::type_name;
     typeLabel += '-';
     typeLabel += pixel_traits<ImagePixelType>::type_name;
+
+    std::string testLabel = "memory.spv/CopyBufferToImageKernel/";
+    testLabel += typeLabel;
 
     const int buffer_height = 64;
     const int buffer_width = 64;
@@ -2314,8 +2334,6 @@ std::pair<int,int> test_copytoimage_kernel(const sample_info&            info,
                                  buffer_width,
                                  buffer_height);
 
-    std::string testLabel = "memory.spv/CopyBufferToImageKernel/";
-    testLabel += typeLabel;
     const bool success = check_results<BufferPixelType, ImagePixelType>(src_buffer.mem, dstImage.mem,
                                                                         buffer_width, buffer_height,
                                                                         buffer_height,
@@ -2329,24 +2347,6 @@ std::pair<int,int> test_copytoimage_kernel(const sample_info&            info,
     return (success ? std::make_pair(1, 0) : std::make_pair(0, 1));
 }
 
-template <typename ImagePixelType>
-std::pair<int,int> test_copytoimage_series(const sample_info&            info,
-                                           const std::vector<VkSampler>& samplers,
-                                           bool                          logIncorrect = false,
-                                           bool                          logCorrect = false) {
-    std::pair<int,int> results(0, 0);
-
-    results += test_copytoimage_kernel<uchar,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
-    results += test_copytoimage_kernel<uchar4,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
-    results += test_copytoimage_kernel<half,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
-    results += test_copytoimage_kernel<half4,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
-    results += test_copytoimage_kernel<float,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
-    results += test_copytoimage_kernel<float2,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
-    results += test_copytoimage_kernel<float4,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
-
-    return results;
-}
-
 /* ============================================================================================== */
 
 template <typename BufferPixelType, typename ImagePixelType>
@@ -2357,6 +2357,9 @@ std::pair<int,int> test_copyfromimage_kernel(const sample_info&            info,
     std::string typeLabel = pixel_traits<BufferPixelType>::type_name;
     typeLabel += '-';
     typeLabel += pixel_traits<ImagePixelType>::type_name;
+
+    std::string testLabel = "memory.spv/CopyImageToBufferKernel/";
+    testLabel += typeLabel;
 
     const int buffer_height = 64;
     const int buffer_width = 64;
@@ -2394,8 +2397,6 @@ std::pair<int,int> test_copyfromimage_kernel(const sample_info&            info,
                                  buffer_width,
                                  buffer_height);
 
-    std::string testLabel = "memory.spv/CopyImageToBufferKernel/";
-    testLabel += typeLabel;
     const bool success = check_results<ImagePixelType, BufferPixelType>(srcImage.mem, dst_buffer.mem,
                                                                         buffer_width, buffer_height,
                                                                         buffer_height,
@@ -2409,28 +2410,86 @@ std::pair<int,int> test_copyfromimage_kernel(const sample_info&            info,
     return (success ? std::make_pair(1, 0) : std::make_pair(0, 1));
 }
 
+/* ============================================================================================== */
+
+struct test_t {
+    typedef std::pair<int,int> (*fn)(const sample_info&, const std::vector<VkSampler>&, bool, bool);
+
+    fn          func;
+    std::string label;
+};
+
+std::pair<int,int> test_series(const test_t*                    first,
+                               const test_t*                    last,
+                               const sample_info&               info,
+                               const std::vector<VkSampler>&    samplers,
+                               bool                             logIncorrect = false,
+                               bool                             logCorrect = false) {
+    auto results = std::make_pair(0, 0);
+
+    for (; first != last; ++first) {
+        try {
+            results += (*first->func)(info, samplers, logIncorrect, logCorrect);
+        }
+        catch(const vulkan_error& ve) {
+            // exceptions thrown during a test are counted as failures
+            LOGE("%s: Exception %s: VkResult=%d", first->label.c_str(), ve.what(), ve.get_result());
+            results += std::make_pair(0, 1);
+        }
+        catch(const std::exception& e) {
+            // exceptions thrown during a test are counted as failures
+            LOGE("%s: Exception %s", first->label.c_str(), e.what());
+            results += std::make_pair(0, 1);
+        }
+    }
+
+    return results;
+};
+
+template <typename ImagePixelType>
+std::pair<int,int> test_copytoimage_series(const sample_info&            info,
+                                           const std::vector<VkSampler>& samplers,
+                                           bool                          logIncorrect = false,
+                                           bool                          logCorrect = false) {
+    std::string labelEnd = pixel_traits<ImagePixelType>::type_name;
+    labelEnd += ">";
+
+    const test_t tests[] = {
+            { test_copytoimage_kernel<uchar, ImagePixelType>, "test_copytoimage_kernel<uchar, " + labelEnd },
+            { test_copytoimage_kernel<uchar4, ImagePixelType>, "test_copytoimage_kernel<uchar4, " + labelEnd },
+            { test_copytoimage_kernel<half, ImagePixelType>, "test_copytoimage_kernel<half, " + labelEnd },
+            { test_copytoimage_kernel<half4, ImagePixelType>, "test_copytoimage_kernel<half4, " + labelEnd },
+            { test_copytoimage_kernel<float, ImagePixelType>, "test_copytoimage_kernel<float, " + labelEnd },
+            { test_copytoimage_kernel<float2, ImagePixelType>, "test_copytoimage_kernel<float2, " + labelEnd },
+            { test_copytoimage_kernel<float4, ImagePixelType>, "test_copytoimage_kernel<float4, " + labelEnd },
+    };
+
+    return test_series(std::begin(tests), std::end(tests), info, samplers, logIncorrect, logCorrect);
+}
+
 template <typename ImagePixelType>
 std::pair<int,int> test_copyfromimage_series(const sample_info&            info,
                                              const std::vector<VkSampler>& samplers,
                                              bool                          logIncorrect = false,
                                              bool                          logCorrect = false) {
-    std::pair<int,int> results(0, 0);
+    std::string labelEnd = pixel_traits<ImagePixelType>::type_name;
+    labelEnd += ">";
 
-    results += test_copyfromimage_kernel<uchar,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
-    results += test_copyfromimage_kernel<uchar4,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
-    results += test_copyfromimage_kernel<half,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
-    results += test_copyfromimage_kernel<half4,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
-    results += test_copyfromimage_kernel<float,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
-    results += test_copyfromimage_kernel<float2,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
-    results += test_copyfromimage_kernel<float4,ImagePixelType>(info, samplers, logIncorrect, logCorrect);
+    const test_t tests[] = {
+            { test_copyfromimage_kernel<uchar, ImagePixelType>, "test_copyfromimage_kernel<uchar, " + labelEnd },
+            { test_copyfromimage_kernel<uchar4, ImagePixelType>, "test_copyfromimage_kernel<uchar4, " + labelEnd },
+            { test_copyfromimage_kernel<half, ImagePixelType>, "test_copyfromimage_kernel<half, " + labelEnd },
+            { test_copyfromimage_kernel<half4, ImagePixelType>, "test_copyfromimage_kernel<half4, " + labelEnd },
+            { test_copyfromimage_kernel<float, ImagePixelType>, "test_copyfromimage_kernel<float, " + labelEnd },
+            { test_copyfromimage_kernel<float2, ImagePixelType>, "test_copyfromimage_kernel<float2, " + labelEnd },
+            { test_copyfromimage_kernel<float4, ImagePixelType>, "test_copyfromimage_kernel<float4, " + labelEnd }
+    };
 
-    return results;
+    return test_series(std::begin(tests), std::end(tests), info, samplers, logIncorrect, logCorrect);
 }
 
 
 /* ============================================================================================== */
-
-typedef std::pair<int,int> (*test_fn_t)(const sample_info&, const std::vector<VkSampler>&, bool, bool);
 
 int sample_main(int argc, char *argv[]) {
     struct sample_info info = {};
@@ -2471,40 +2530,33 @@ int sample_main(int argc, char *argv[]) {
     const auto localsizes = run_localsize_kernel(info, samplers);
 #endif
 
-    std::pair<int,int> test_results(0, 0);
+    const test_t tests[] = {
+            { test_fill_kernel<float4>, "test_fill_kernel<float4>" },
+            { test_fill_kernel<half4>, "test_fill_kernel<half4>" },
 
-    const test_fn_t tests[] = {
-            test_fill_kernel<float4>,
-            test_fill_kernel<half4>,
+            { test_copytoimage_series<float4>, "test_copytoimage_series<float4>" },
+            { test_copytoimage_series<half4>, "test_copytoimage_series<half4>" },
+            { test_copytoimage_series<uchar4>, "test_copytoimage_series<uchar4>" },
 
-            test_copytoimage_series<float4>,
-            test_copytoimage_series<half4>,
-            test_copytoimage_series<uchar4>,
+            { test_copyfromimage_series<float4>, "test_copyfromimage_series<float4>" },
+            { test_copyfromimage_series<half4>, "test_copyfromimage_series<half4>" },
+            { test_copyfromimage_series<uchar4>, "test_copyfromimage_series<uchar4>" },
 
-            test_copyfromimage_series<float4>,
-            test_copyfromimage_series<half4>,
-            test_copyfromimage_series<uchar4>,
-
-            test_copytoimage_series<float2>,
-            test_copytoimage_series<half2>,
-            test_copytoimage_series<uchar2>,
-
-            test_copyfromimage_series<float2>,
-            test_copyfromimage_series<half2>,
-            test_copyfromimage_series<uchar2>,
-
-            test_copytoimage_series<float>,
-            test_copytoimage_series<half>,
-            test_copytoimage_series<uchar>,
-
-            test_copyfromimage_series<float>,
-            test_copyfromimage_series<half>,
-            test_copyfromimage_series<uchar>,
+            { test_copytoimage_series<float2>, "test_copytoimage_series<float2>" },
+            { test_copytoimage_series<half2>, "test_copytoimage_series<half2>" },
+            { test_copytoimage_series<uchar2>, "test_copytoimage_series<uchar2>" },
+            { test_copyfromimage_series<float2>, "test_copyfromimage_series<float2>" },
+            { test_copyfromimage_series<half2>, "test_copyfromimage_series<half2>" },
+            { test_copyfromimage_series<uchar2>, "test_copyfromimage_series<uchar2>" },
+            { test_copytoimage_series<float>, "test_copytoimage_series<float>" },
+            { test_copytoimage_series<half>, "test_copytoimage_series<half>" },
+            { test_copytoimage_series<uchar>, "test_copytoimage_series<uchar>" },
+            { test_copyfromimage_series<float>, "test_copyfromimage_series<float>" },
+            { test_copyfromimage_series<half>, "test_copyfromimage_series<half>" },
+            { test_copyfromimage_series<uchar>, "test_copyfromimage_series<uchar>" },
     };
 
-    for (auto t : tests) {
-        test_results += t(info, samplers, false, false);
-    }
+    const auto test_results = test_series(std::begin(tests), std::end(tests), info, samplers);
 
     //
     // Clean up
