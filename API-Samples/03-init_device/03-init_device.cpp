@@ -1490,8 +1490,8 @@ kernel_module::~kernel_module() {
 VkDescriptorSet kernel_module::getLiteralSamplersDescriptorSet() const {
     VkDescriptorSet result = VK_NULL_HANDLE;
 
-    if (!mSpvMap.samplers.empty()) {
-        result = mDescriptors[0];
+    if (-1 != mSpvMap.samplers_desc_set) {
+        result = mDescriptors[mSpvMap.samplers_desc_set];
     }
 
     return result;
@@ -1505,7 +1505,7 @@ VkDescriptorSet kernel_module::getKernelArgumentDescriptorSet(const std::string&
                                              [&entryPoint](const spv_map::kernel& k) {
                                                  return k.name == entryPoint;
                                              });
-    if (kernel_arg_map != mSpvMap.kernels.end()) {
+    if (kernel_arg_map != mSpvMap.kernels.end() && -1 != kernel_arg_map->descriptor_set) {
         result = mDescriptors[kernel_arg_map->descriptor_set];
     }
 
