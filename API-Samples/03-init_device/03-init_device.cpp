@@ -356,9 +356,10 @@ struct spv_map {
     static arg::kind_t parse_argType(const std::string& argType);
     static spv_map   parse(std::istream& in);
 
-    spv_map() : samplers(), kernels() {};
+    spv_map() : samplers(), kernels(), samplers_desc_set(-1) {};
 
     std::vector<sampler>    samplers;
+    int                     samplers_desc_set;
     std::vector<kernel>     kernels;
 };
 
@@ -1065,6 +1066,10 @@ spv_map spv_map::parse(std::istream& in) {
                     // all samplers, if any, are documented to share descriptor set 0
                     const int ds = std::atoi(value.c_str());
                     assert(ds == 0);
+
+                    if (-1 == result.samplers_desc_set) {
+                        result.samplers_desc_set = ds;
+                    }
                 }
                 else if ("binding" == key) {
                     s->binding = std::atoi(value.c_str());
@@ -1868,7 +1873,7 @@ void kernel_invocation::updateDescriptorSets(VkDescriptorSet literalSamplerDescS
 
             case VK_DESCRIPTOR_TYPE_SAMPLER:
                 argSet.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-                literalSamplerSet.pImageInfo = &(*nextImage);
+                argSet.pImageInfo = &(*nextImage);
                 ++nextImage;
                 break;
 
@@ -2092,7 +2097,8 @@ void run_copyimagetobuffer_kernel(const sample_info& info,
 }
 
 std::tuple<int,int,int> run_localsize_kernel(const sample_info&             info,
-                                             const std::vector<VkSampler>&  samplers) {
+                                             const std::vector<VkSampler>&  samplers,
+                                             const kernel_invocation::WorkgroupDimensions& workgroup_sizes) {
     struct scalar_args {
         int outWorkgroupX;  // offset 0
         int outWorkgroupY;  // offset 4
@@ -2105,14 +2111,12 @@ std::tuple<int,int,int> run_localsize_kernel(const sample_info&             info
     buffer outArgs(info, sizeof(scalar_args));
 
     // The localsize kernel needs only a single workgroup with a single workitem
-    const auto workgroup_sizes = std::make_tuple(1, 1);
     const auto num_workgroups = std::make_tuple(1, 1);
 
     kernel_module     module(info.device, info.desc_pool, "localsize");
-    kernel            kern(info.device, module, "main", workgroup_sizes);
+    kernel            kern(info.device, module, "ReadLocalSize", workgroup_sizes);
     kernel_invocation invocation(info.device, info.cmd_pool, info.memory_properties);
 
-    invocation.addLiteralSamplers(samplers.begin(), samplers.end());
     invocation.addBufferArgument(outArgs.buf);
 
     invocation.run(info.graphics_queue, module, kern, num_workgroups);
@@ -2327,6 +2331,38 @@ bool check_results(const device_memory& observed,
 }
 
 /* ============================================================================================== */
+
+std::pair<int,int> test_localsize_kernel(const sample_info&             info,
+                                         const std::vector<VkSampler>&  samplers,
+                                         bool                           logIncorrect = false,
+                                         bool                           logCorrect = false) {
+    std::string label = "localsize.spv/ReadLocalSizes/";
+    const kernel_invocation::WorkgroupDimensions expected = std::make_pair(15, 23);
+
+    const auto observed = run_localsize_kernel(info, samplers, expected);
+
+    const bool success = (std::get<0>(expected) == std::get<0>(observed) &&
+                          std::get<1>(expected) == std::get<1>(observed) &&
+                          1 == std::get<2>(observed));
+    if (success) {
+        if (logCorrect) {
+            LOGE("%s:  CORRECT workgroup_size{x:%d, y:%d, z:%d}", label.c_str(),
+                 std::get<0>(observed), std::get<1>(observed), std::get<2>(observed));
+        }
+    }
+    else {
+        if (logIncorrect) {
+            LOGE("%s: INCORRECT workgroup_size expected{x=%d, y=%d, z=1} observed{x=%d, y=%d, z=%d}",
+                 label.c_str(),
+                 std::get<0>(expected), std::get<1>(expected),
+                 std::get<0>(observed), std::get<1>(observed), std::get<2>(observed));
+        }
+    }
+
+    LOGE("%s: %s", label.c_str(), (success ? "Correct" : "Incorrect"));
+
+    return (success ? std::make_pair(1, 0) : std::make_pair(0, 1));
+};
 
 template <typename PixelType>
 std::pair<int,int> test_fill_kernel(const sample_info&            info,
@@ -2619,11 +2655,8 @@ int sample_main(int argc, char *argv[]) {
                    std::back_inserter(samplers),
                    std::bind(create_compatible_sampler, info.device, std::placeholders::_1));
 
-#if 0
-    const auto localsizes = run_localsize_kernel(info, samplers);
-#endif
-
     const test_t tests[] = {
+            { test_localsize_kernel, "test_localsize_kernel" },
             { test_fill_kernel<float4>, "test_fill_kernel<float4>" },
             { test_fill_kernel<half4>, "test_fill_kernel<half4>" },
 

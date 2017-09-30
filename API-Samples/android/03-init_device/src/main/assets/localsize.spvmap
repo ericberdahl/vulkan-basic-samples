@@ -1,3 +1,1 @@
-kernel,main,arg,outWorkgroupX,argOrdinal,0,descriptorSet,1,binding,0,offset,0,argType,pod
-kernel,main,arg,outWorkgroupY,argOrdinal,1,descriptorSet,1,binding,0,offset,4,argType,pod
-kernel,main,arg,outWorkgroupZ,argOrdinal,2,descriptorSet,1,binding,0,offset,8,argType,pod
+kernel,ReadLocalSize,arg,args,argOrdinal,0,descriptorSet,0,binding,0,offset,0,argType,buffer
