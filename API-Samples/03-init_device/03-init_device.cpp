@@ -39,6 +39,1167 @@ create and destroy a Vulkan physical device
 
 /* ============================================================================================== */
 
+namespace vulkan_utils {
+
+    class error : public std::runtime_error {
+        VkResult    mResult;
+    public:
+        error(const std::string& s, VkResult result) : runtime_error(s), mResult(result) {}
+
+        VkResult get_result() const { return mResult; }
+    };
+
+    void throwIfNotSuccess(VkResult result, const std::string& label);
+
+    struct device_memory {
+        device_memory() : device(VK_NULL_HANDLE), mem(VK_NULL_HANDLE) {}
+        device_memory(VkDevice                                  dev,
+                      const VkMemoryRequirements&               mem_reqs,
+                      const VkPhysicalDeviceMemoryProperties    memoryProperties)
+                : device_memory() {
+            allocate(dev, mem_reqs, memoryProperties);
+        };
+
+        void    allocate(VkDevice                                   dev,
+                         const VkMemoryRequirements&                mem_reqs,
+                         const VkPhysicalDeviceMemoryProperties&    memory_properties);
+        void    reset();
+
+        VkDevice        device;
+        VkDeviceMemory  mem;
+    };
+
+    struct buffer {
+        buffer() : mem(), buf(VK_NULL_HANDLE) {}
+        buffer(const sample_info &info, VkDeviceSize num_bytes) : buffer(info.device, info.memory_properties, num_bytes) {}
+
+        buffer(VkDevice dev, const VkPhysicalDeviceMemoryProperties memoryProperties, VkDeviceSize num_bytes) : buffer() {
+            allocate(dev, memoryProperties, num_bytes);
+        };
+
+        void    allocate(VkDevice dev, const VkPhysicalDeviceMemoryProperties& memory_properties, VkDeviceSize num_bytes);
+        void    reset();
+
+        device_memory   mem;
+        VkBuffer        buf;
+    };
+
+    struct image {
+        image() : mem(), im(VK_NULL_HANDLE), view(VK_NULL_HANDLE) {}
+        image(const sample_info&  info,
+              uint32_t      width,
+              uint32_t      height,
+              VkFormat      format) : image(info.device, info.memory_properties, width, height, format) {}
+
+        image(VkDevice dev,
+              const VkPhysicalDeviceMemoryProperties memoryProperties,
+              uint32_t                                   width,
+              uint32_t                                   height,
+              VkFormat                                   format) : image() {
+            allocate(dev, memoryProperties, width, height, format);
+        };
+
+        void    allocate(VkDevice                                   dev,
+                         const VkPhysicalDeviceMemoryProperties&    memory_properties,
+                         uint32_t                                   width,
+                         uint32_t                                   height,
+                         VkFormat                                   format);
+        void    reset();
+
+        device_memory   mem;
+        VkImage         im;
+        VkImageView     view;
+    };
+
+    struct memory_map {
+        memory_map(VkDevice dev, VkDeviceMemory mem);
+        memory_map(const device_memory& mem) : memory_map(mem.device, mem.mem) {}
+        memory_map(const buffer& buf) : memory_map(buf.mem) {}
+        memory_map(const image& im) : memory_map(im.mem) {}
+        ~memory_map();
+
+        VkDevice        dev;
+        VkDeviceMemory  mem;
+        void*           data;
+    };
+}
+
+namespace vulkan_utils {
+
+    namespace {
+        uint32_t find_compatible_memory_index(const VkPhysicalDeviceMemoryProperties& memory_properties,
+                                              uint32_t   typeBits,
+                                              VkFlags    requirements_mask) {
+            uint32_t result = std::numeric_limits<uint32_t>::max();
+            assert(memory_properties.memoryTypeCount < std::numeric_limits<uint32_t>::max());
+
+            // Search memtypes to find first index with those properties
+            for (uint32_t i = 0; i < memory_properties.memoryTypeCount; i++) {
+                if ((typeBits & 1) == 1) {
+                    // Type is available, does it match user properties?
+                    if ((memory_properties.memoryTypes[i].propertyFlags & requirements_mask) == requirements_mask) {
+                        result = i;
+                        break;
+                    }
+                }
+                typeBits >>= 1;
+            }
+
+            return result;
+        }
+    }
+
+/* ============================================================================================== */
+
+    void throwIfNotSuccess(VkResult result, const std::string& label) {
+        if (VK_SUCCESS != result) {
+            throw error(label, result);
+        }
+    }
+
+/* ============================================================================================== */
+
+    memory_map::memory_map(VkDevice device, VkDeviceMemory memory) :
+            dev(device), mem(memory), data(nullptr) {
+        throwIfNotSuccess(vkMapMemory(device, memory, 0, VK_WHOLE_SIZE, 0, &data),
+                          "vkMapMemory");
+    }
+
+    memory_map::~memory_map() {
+        if (dev && mem) {
+            vkUnmapMemory(dev, mem);
+        }
+    }
+
+/* ============================================================================================== */
+
+    void device_memory::allocate(VkDevice dev,
+                                 const VkMemoryRequirements &mem_reqs,
+                                 const VkPhysicalDeviceMemoryProperties &memory_properties) {
+        reset();
+
+        device = dev;
+
+        // Allocate memory for the buffer
+        VkMemoryAllocateInfo alloc_info = {};
+        alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+        alloc_info.allocationSize = mem_reqs.size;
+        alloc_info.memoryTypeIndex = find_compatible_memory_index(memory_properties,
+                                                                  mem_reqs.memoryTypeBits,
+                                                                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                                                  VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+        assert(alloc_info.memoryTypeIndex < std::numeric_limits<uint32_t>::max() &&
+               "No mappable, coherent memory");
+        throwIfNotSuccess(vkAllocateMemory(device, &alloc_info, NULL, &mem),
+                          "vkAllocateMemory");
+    }
+
+    void device_memory::reset() {
+        if (mem != VK_NULL_HANDLE) {
+            vkFreeMemory(device, mem, NULL);
+            mem = VK_NULL_HANDLE;
+        }
+
+        device = VK_NULL_HANDLE;
+    }
+
+
+/* ============================================================================================== */
+
+    void buffer::allocate(VkDevice dev,
+                          const VkPhysicalDeviceMemoryProperties &memory_properties,
+                          VkDeviceSize inNumBytes) {
+        reset();
+
+        // Allocate the buffer
+        VkBufferCreateInfo buf_info = {};
+        buf_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+        buf_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+        buf_info.size = inNumBytes;
+        buf_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+        throwIfNotSuccess(vkCreateBuffer(dev, &buf_info, NULL, &buf),
+                          "vkCreateBuffer");
+
+        // Find out what we need in order to allocate memory for the buffer
+        VkMemoryRequirements mem_reqs = {};
+        vkGetBufferMemoryRequirements(dev, buf, &mem_reqs);
+
+        mem.allocate(dev, mem_reqs, memory_properties);
+
+        // Bind the memory to the buffer object
+        throwIfNotSuccess(vkBindBufferMemory(dev, buf, mem.mem, 0),
+                          "vkBindBufferMemory");
+    }
+
+    void buffer::reset() {
+        if (buf != VK_NULL_HANDLE) {
+            vkDestroyBuffer(mem.device, buf, NULL);
+            buf = VK_NULL_HANDLE;
+        }
+
+        mem.reset();
+    }
+
+/* ============================================================================================== */
+
+    void image::allocate(VkDevice dev,
+                         const VkPhysicalDeviceMemoryProperties &memory_properties,
+                         uint32_t width,
+                         uint32_t height,
+                         VkFormat format) {
+        reset();
+
+        VkImageCreateInfo imageInfo = {};
+        imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
+        imageInfo.imageType = VK_IMAGE_TYPE_2D;
+        imageInfo.format = format;
+        imageInfo.extent.width = width;
+        imageInfo.extent.height = height;
+        imageInfo.extent.depth = 1;
+        imageInfo.mipLevels = 1;
+        imageInfo.arrayLayers = 1;
+        imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
+        imageInfo.tiling = VK_IMAGE_TILING_LINEAR;
+        imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT |
+                          VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+        imageInfo.initialLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+        throwIfNotSuccess(vkCreateImage(dev, &imageInfo, nullptr, &im),
+                          "vkCreateImage");
+
+        // Find out what we need in order to allocate memory for the image
+        VkMemoryRequirements mem_reqs = {};
+        vkGetImageMemoryRequirements(dev, im, &mem_reqs);
+
+        mem.allocate(dev, mem_reqs, memory_properties);
+
+        // Bind the memory to the image object
+        throwIfNotSuccess(vkBindImageMemory(dev, im, mem.mem, 0),
+                          "vkBindImageMemory");
+
+        // Allocate the image view
+        VkImageViewCreateInfo viewInfo = {};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+        viewInfo.image = im;
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = format;
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.levelCount = 1;
+
+        throwIfNotSuccess(vkCreateImageView(dev, &viewInfo, nullptr, &view),
+                          "vkCreateImageView");
+    }
+
+    void image::reset() {
+        if (view != VK_NULL_HANDLE) {
+            vkDestroyImageView(mem.device, view, NULL);
+            view = VK_NULL_HANDLE;
+        }
+        if (im != VK_NULL_HANDLE) {
+            vkDestroyImage(mem.device, im, NULL);
+            im = VK_NULL_HANDLE;
+        }
+
+        mem.reset();
+    }
+
+/* ============================================================================================== */
+
+} // namespace vulkan_utils
+
+namespace clspv_utils {
+
+    namespace details {
+        struct spv_map {
+            struct sampler {
+                sampler() : opencl_flags(0), binding(-1) {};
+
+                int opencl_flags;
+                int binding;
+            };
+
+            struct arg {
+                enum kind_t {
+                    kind_unknown, kind_pod, kind_buffer, kind_ro_image, kind_wo_image, kind_sampler
+                };
+
+                arg() : kind(kind_unknown), binding(-1), offset(0) {};
+
+                kind_t kind;
+                int binding;
+                int offset;
+            };
+
+            struct kernel {
+                kernel() : name(), descriptor_set(-1), args() {};
+
+                std::string name;
+                int descriptor_set;
+                std::vector<arg> args;
+            };
+
+            static arg::kind_t parse_argType(const std::string &argType);
+
+            static spv_map parse(std::istream &in);
+
+            spv_map() : samplers(), kernels(), samplers_desc_set(-1) {};
+
+            std::vector<sampler> samplers;
+            int samplers_desc_set;
+            std::vector<kernel> kernels;
+        };
+
+        struct pipeline_layout {
+            pipeline_layout() : device(VK_NULL_HANDLE), descriptors(), pipeline(VK_NULL_HANDLE) {};
+
+            void    reset();
+
+            VkDevice                            device;
+            std::vector<VkDescriptorSetLayout>  descriptors;
+            VkPipelineLayout                    pipeline;
+        };
+    } // namespace details
+
+    typedef std::tuple<int,int> WorkgroupDimensions;
+
+    class kernel_module {
+    public:
+        kernel_module(VkDevice              device,
+                      VkDescriptorPool      pool,
+                      const std::string&    moduleName);
+
+        ~kernel_module();
+
+        VkDescriptorSet getLiteralSamplersDescriptorSet() const;
+        VkDescriptorSet getKernelArgumentDescriptorSet(const std::string& entryPoint) const;
+
+        VkPipeline      createPipeline(const std::string&           entryPoint,
+                                       const WorkgroupDimensions&   work_group_sizes) const;
+
+        void bindDescriptors(VkCommandBuffer command) const;
+
+    private:
+        std::vector<VkDescriptorSet>    allocateDescriptorSet(VkDescriptorPool pool) const;
+        VkDescriptorSetLayout           createDescriptorSetLayout(const std::vector<VkDescriptorType>& descriptorTypes);
+        details::pipeline_layout        createPipelineLayout(const details::spv_map& spvMap);
+
+    private:
+        details::pipeline_layout            mPipelineLayout;
+
+        VkDevice                            mDevice;
+        std::vector<VkDescriptorSet>        mDescriptors;
+        VkDescriptorPool                    mDescriptorPool;
+        VkShaderModule                      mShaderModule;
+        details::spv_map                    mSpvMap;
+    };
+
+    class kernel {
+    public:
+        kernel(VkDevice                     device,
+               const kernel_module&         module,
+               std::string                  entryPoint,
+               const WorkgroupDimensions&   workgroup_sizes);
+
+        ~kernel();
+
+        void bindPipeline(VkCommandBuffer command) const;
+
+        VkDescriptorSet getLiteralSamplerDescSet() const { return mLiteralSamplerDescSet; }
+        VkDescriptorSet getArgumentDescSet() const { return mArgumentDescSet; }
+
+    private:
+        VkDescriptorSetLayout   createDescriptorSetLayout(const std::vector<VkDescriptorType>& descriptorTypes);
+        VkPipeline              createPipeline(const std::tuple<int,int>& work_group_sizes);
+
+    private:
+        VkDevice        mDevice;
+        VkPipeline      mPipeline;
+        VkDescriptorSet mLiteralSamplerDescSet;
+        VkDescriptorSet mArgumentDescSet;
+    };
+
+    class kernel_invocation {
+    public:
+        kernel_invocation(VkDevice              device,
+                          VkCommandPool         cmdPool,
+                          const VkPhysicalDeviceMemoryProperties&   memoryProperties);
+
+        ~kernel_invocation();
+
+        template <typename Iterator>
+        void    addLiteralSamplers(Iterator first, Iterator last);
+
+        void    addBufferArgument(VkBuffer buf);
+        void    addReadOnlyImageArgument(VkImageView image);
+        void    addWriteOnlyImageArgument(VkImageView image);
+        void    addSamplerArgument(VkSampler samp);
+
+        template <typename T>
+        void    addPodArgument(const T& pod);
+
+        void    run(VkQueue                     queue,
+                    const kernel_module&        module,
+                    const kernel&               kern,
+                    const WorkgroupDimensions&  num_workgroups);
+
+    private:
+        void        fillCommandBuffer(const kernel_module&          module,
+                                      const kernel&                 kern,
+                                      const WorkgroupDimensions&    num_workgroups);
+        void        updateDescriptorSets(VkDescriptorSet literalSamplerSet,
+                                         VkDescriptorSet argumentSet);
+        void        submitCommand(VkQueue queue);
+
+    private:
+        struct arg {
+            VkDescriptorType    type;
+            VkBuffer            buffer;
+            VkSampler           sampler;
+            VkImageView         image;
+        };
+
+    private:
+        VkDevice                            mDevice;
+        VkCommandPool                       mCmdPool;
+        VkCommandBuffer                     mCommand;
+        VkPhysicalDeviceMemoryProperties    mMemoryProperties;
+
+        std::vector<VkSampler>              mLiteralSamplers;
+        std::vector<arg>                    mArguments;
+        std::vector<vulkan_utils::buffer>   mPodBuffers;
+    };
+
+    template <typename Iterator>
+    void kernel_invocation::addLiteralSamplers(Iterator first, Iterator last) {
+        mLiteralSamplers.insert(mLiteralSamplers.end(), first, last);
+    }
+
+    template <typename T>
+    void kernel_invocation::addPodArgument(const T& pod) {
+        vulkan_utils::buffer scalar_args(mDevice, mMemoryProperties, sizeof(T));
+        mPodBuffers.push_back(scalar_args);
+
+        {
+            vulkan_utils::memory_map scalar_map(scalar_args);
+            memcpy(scalar_map.data, &pod, sizeof(T));
+        }
+
+        addBufferArgument(scalar_args.buf);
+    }
+}
+
+/* ============================================================================================== */
+
+namespace clspv_utils {
+
+    namespace {
+
+        details::spv_map create_spv_map(const char *spvmapFilename) {
+            // Read the spvmap file into a string buffer
+            std::FILE *spvmap_file = AndroidFopen(spvmapFilename, "rb");
+            assert(spvmap_file != NULL);
+            std::fseek(spvmap_file, 0, SEEK_END);
+            std::string buffer(std::ftell(spvmap_file), ' ');
+            std::fseek(spvmap_file, 0, SEEK_SET);
+            std::fread(&buffer.front(), 1, buffer.length(), spvmap_file);
+            std::fclose(spvmap_file);
+
+            // parse the spvmap file contents
+            std::istringstream in(buffer);
+            return details::spv_map::parse(in);
+        }
+
+        std::string read_csv_field(std::istream& in) {
+            std::string result;
+
+            if (in.good()) {
+                const bool is_quoted = (in.peek() == '"');
+
+                if (is_quoted) {
+                    in.ignore(std::numeric_limits<std::streamsize>::max(), '"');
+                }
+
+                std::getline(in, result, is_quoted ? '"' : ',');
+
+                if (is_quoted) {
+                    in.ignore(std::numeric_limits<std::streamsize>::max(), ',');
+                }
+            }
+
+            return result;
+        }
+
+        VkShaderModule create_shader(VkDevice device, const char* spvFileName) {
+            std::FILE* spv_file = AndroidFopen(spvFileName, "rb");
+            assert(spv_file != NULL);
+
+            std::fseek(spv_file, 0, SEEK_END);
+            // Use vector of uint32_t to ensure alignment is satisfied.
+            const auto num_bytes = std::ftell(spv_file);
+            assert(0 == (num_bytes % sizeof(uint32_t)));
+            const auto num_words = (num_bytes + sizeof(uint32_t) - 1) / sizeof(uint32_t);
+            std::vector<uint32_t> spvModule(num_words);
+            assert(num_bytes == (spvModule.size() * sizeof(uint32_t)));
+
+            std::fseek(spv_file, 0, SEEK_SET);
+            std::fread(spvModule.data(), 1, num_bytes, spv_file);
+
+            std::fclose(spv_file);
+
+            VkShaderModuleCreateInfo shaderModuleCreateInfo = {};
+            shaderModuleCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+            shaderModuleCreateInfo.codeSize = num_bytes;
+            shaderModuleCreateInfo.pCode = spvModule.data();
+
+            VkShaderModule shaderModule = VK_NULL_HANDLE;
+            vulkan_utils::throwIfNotSuccess(vkCreateShaderModule(device,
+                                                                 &shaderModuleCreateInfo,
+                                                                 NULL,
+                                                                 &shaderModule),
+                                            "vkCreateShaderModule");
+
+            return shaderModule;
+        }
+
+        VkCommandBuffer allocate_command_buffer(VkDevice device, VkCommandPool cmd_pool) {
+            VkCommandBufferAllocateInfo allocInfo = {};
+            allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+            allocInfo.commandPool = cmd_pool;
+            allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+            allocInfo.commandBufferCount = 1;
+
+            VkCommandBuffer result = VK_NULL_HANDLE;
+            vulkan_utils::throwIfNotSuccess(vkAllocateCommandBuffers(device, &allocInfo, &result),
+                                            "vkAllocateCommandBuffers");
+
+            return result;
+        }
+
+    } // anonymous namespace
+
+    namespace details {
+
+        spv_map::arg::kind_t spv_map::parse_argType(const std::string &argType) {
+            arg::kind_t result = arg::kind_unknown;
+
+            if (argType == "pod") {
+                result = arg::kind_pod;
+            } else if (argType == "buffer") {
+                result = arg::kind_buffer;
+            } else if (argType == "ro_image") {
+                result = arg::kind_ro_image;
+            } else if (argType == "wo_image") {
+                result = arg::kind_wo_image;
+            } else if (argType == "sampler") {
+                result = arg::kind_sampler;
+            } else {
+                assert(0 && "unknown spvmap arg type");
+            }
+
+            return result;
+        }
+
+        spv_map spv_map::parse(std::istream &in) {
+            spv_map result;
+
+            while (!in.eof()) {
+                // read one line
+                std::string line;
+                std::getline(in, line);
+
+                std::istringstream in_line(line);
+                std::string key = read_csv_field(in_line);
+                std::string value = read_csv_field(in_line);
+                if ("sampler" == key) {
+                    auto s = result.samplers.insert(result.samplers.end(), spv_map::sampler());
+                    assert(s != result.samplers.end());
+
+                    s->opencl_flags = std::atoi(value.c_str());
+
+                    while (!in_line.eof()) {
+                        key = read_csv_field(in_line);
+                        value = read_csv_field(in_line);
+
+                        if ("descriptorSet" == key) {
+                            // all samplers, if any, are documented to share descriptor set 0
+                            const int ds = std::atoi(value.c_str());
+                            assert(ds == 0);
+
+                            if (-1 == result.samplers_desc_set) {
+                                result.samplers_desc_set = ds;
+                            }
+                        } else if ("binding" == key) {
+                            s->binding = std::atoi(value.c_str());
+                        }
+                    }
+                } else if ("kernel" == key) {
+                    auto kernel = std::find_if(result.kernels.begin(), result.kernels.end(),
+                                               [&value](const spv_map::kernel &iter) {
+                                                   return iter.name == value;
+                                               });
+                    if (kernel == result.kernels.end()) {
+                        kernel = result.kernels.insert(kernel, spv_map::kernel());
+                        kernel->name = value;
+                    }
+                    assert(kernel != result.kernels.end());
+
+                    auto ka = kernel->args.end();
+
+                    while (!in_line.eof()) {
+                        key = read_csv_field(in_line);
+                        value = read_csv_field(in_line);
+
+                        if ("argOrdinal" == key) {
+                            assert(ka == kernel->args.end());
+
+                            const int arg_index = std::atoi(value.c_str());
+
+                            if (kernel->args.size() <= arg_index) {
+                                ka = kernel->args.insert(ka, arg_index - kernel->args.size() + 1,
+                                                         spv_map::arg());
+                            } else {
+                                ka = std::next(kernel->args.begin(), arg_index);
+                            }
+
+                            assert(ka != kernel->args.end());
+                        } else if ("descriptorSet" == key) {
+                            const int ds = std::atoi(value.c_str());
+                            if (-1 == kernel->descriptor_set) {
+                                kernel->descriptor_set = ds;
+                            }
+
+                            // all args for a kernel are documented to share the same descriptor set
+                            assert(ds == kernel->descriptor_set);
+                        } else if ("binding" == key) {
+                            ka->binding = std::atoi(value.c_str());
+                        } else if ("offset" == key) {
+                            ka->offset = std::atoi(value.c_str());
+                        } else if ("argType" == key) {
+                            ka->kind = parse_argType(value);
+                        }
+                    }
+                }
+            }
+
+            std::sort(result.kernels.begin(),
+                      result.kernels.end(),
+                      [](const spv_map::kernel &a, const spv_map::kernel &b) {
+                          return a.descriptor_set < b.descriptor_set;
+                      });
+
+            return result;
+        }
+
+        void pipeline_layout::reset() {
+            std::for_each(descriptors.begin(), descriptors.end(), std::bind(vkDestroyDescriptorSetLayout, device, std::placeholders::_1, nullptr));
+            descriptors.clear();
+
+            if (VK_NULL_HANDLE != device && VK_NULL_HANDLE != pipeline) {
+                vkDestroyPipelineLayout(device, pipeline, NULL);
+            }
+
+            device = VK_NULL_HANDLE;
+            pipeline = VK_NULL_HANDLE;
+        }
+
+    } // namespace details
+
+    kernel_module::kernel_module(VkDevice           device,
+                                 VkDescriptorPool   pool,
+                                 const std::string& moduleName) :
+            mPipelineLayout(),
+            mDevice(device),
+            mDescriptors(),
+            mDescriptorPool(pool),
+            mShaderModule(VK_NULL_HANDLE),
+            mSpvMap() {
+        const std::string spvFilename = moduleName + ".spv";
+        mShaderModule = create_shader(device, spvFilename.c_str());
+
+        const std::string mapFilename = moduleName + ".spvmap";
+        mSpvMap = create_spv_map(mapFilename.c_str());
+
+        mPipelineLayout = createPipelineLayout(mSpvMap);
+        mDescriptors = allocateDescriptorSet(pool);
+    }
+
+    kernel_module::~kernel_module() {
+        if (mDevice) {
+            if (!mDescriptors.empty()) {
+                VkResult U_ASSERT_ONLY res = vkFreeDescriptorSets(mDevice,
+                                                                  mDescriptorPool,
+                                                                  mDescriptors.size(),
+                                                                  mDescriptors.data());
+                assert(res == VK_SUCCESS);
+            }
+
+            if (mShaderModule) {
+                vkDestroyShaderModule(mDevice, mShaderModule, NULL);
+            }
+        }
+
+        mPipelineLayout.reset();
+    }
+
+    VkDescriptorSet kernel_module::getLiteralSamplersDescriptorSet() const {
+        VkDescriptorSet result = VK_NULL_HANDLE;
+
+        if (-1 != mSpvMap.samplers_desc_set) {
+            result = mDescriptors[mSpvMap.samplers_desc_set];
+        }
+
+        return result;
+    }
+
+    VkDescriptorSet kernel_module::getKernelArgumentDescriptorSet(const std::string& entryPoint) const {
+        VkDescriptorSet result = VK_NULL_HANDLE;
+
+        const auto kernel_arg_map = std::find_if(mSpvMap.kernels.begin(),
+                                                 mSpvMap.kernels.end(),
+                                                 [&entryPoint](const details::spv_map::kernel& k) {
+                                                     return k.name == entryPoint;
+                                                 });
+        if (kernel_arg_map != mSpvMap.kernels.end() && -1 != kernel_arg_map->descriptor_set) {
+            result = mDescriptors[kernel_arg_map->descriptor_set];
+        }
+
+        return result;
+
+    }
+
+    std::vector<VkDescriptorSet> kernel_module::allocateDescriptorSet(VkDescriptorPool pool) const {
+        std::vector<VkDescriptorSet> result;
+
+        VkDescriptorSetAllocateInfo createInfo = {};
+        createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        createInfo.descriptorPool = pool;
+        createInfo.descriptorSetCount = mPipelineLayout.descriptors.size();
+        createInfo.pSetLayouts = mPipelineLayout.descriptors.data();
+
+        result.resize(createInfo.descriptorSetCount, VK_NULL_HANDLE);
+        vulkan_utils::throwIfNotSuccess(vkAllocateDescriptorSets(mDevice,
+                                                                 &createInfo,
+                                                                 result.data()),
+                                        "vkAllocateDescriptorSets");
+
+        return result;
+    }
+
+    details::pipeline_layout kernel_module::createPipelineLayout(const details::spv_map& spvMap) {
+        details::pipeline_layout result;
+        result.device = mDevice;
+
+        std::vector<VkDescriptorType> descriptorTypes;
+
+        const int num_samplers = spvMap.samplers.size();
+        if (0 < num_samplers) {
+            descriptorTypes.clear();
+            descriptorTypes.resize(num_samplers, VK_DESCRIPTOR_TYPE_SAMPLER);
+            result.descriptors.push_back(createDescriptorSetLayout(descriptorTypes));
+        }
+
+        for (auto &k : spvMap.kernels) {
+            descriptorTypes.clear();
+
+
+            for (auto &ka : k.args) {
+                // ignore any argument not in offset 0
+                if (0 != ka.offset) continue;
+
+                VkDescriptorType argType;
+
+                switch (ka.kind) {
+                    case details::spv_map::arg::kind_pod:
+                    case details::spv_map::arg::kind_buffer:
+                        argType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                        break;
+
+                    case details::spv_map::arg::kind_ro_image:
+                        argType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+                        break;
+
+                    case details::spv_map::arg::kind_wo_image:
+                        argType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                        break;
+
+                    case details::spv_map::arg::kind_sampler:
+                        argType = VK_DESCRIPTOR_TYPE_SAMPLER;
+                        break;
+
+                    default:
+                        assert(0 && "unkown argument type");
+                }
+
+                descriptorTypes.push_back(argType);
+            }
+            result.descriptors.push_back(createDescriptorSetLayout(descriptorTypes));
+        };
+
+        VkPipelineLayoutCreateInfo createInfo = {};
+        createInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+        createInfo.setLayoutCount = result.descriptors.size();
+        createInfo.pSetLayouts = createInfo.setLayoutCount ? result.descriptors.data() : NULL;
+
+        vulkan_utils::throwIfNotSuccess(vkCreatePipelineLayout(mDevice,
+                                                               &createInfo,
+                                                               NULL,
+                                                               &result.pipeline),
+                                        "vkCreatePipelineLayout");
+
+        return result;
+    }
+
+    VkDescriptorSetLayout kernel_module::createDescriptorSetLayout(const std::vector<VkDescriptorType>& descriptorTypes) {
+        std::vector<VkDescriptorSetLayoutBinding> bindingSet;
+
+        VkDescriptorSetLayoutBinding binding = {};
+        binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+        binding.descriptorCount = 1;
+        binding.binding = 0;
+
+        for (auto type : descriptorTypes) {
+            binding.descriptorType = type;
+            bindingSet.push_back(binding);
+
+            ++binding.binding;
+        }
+
+        VkDescriptorSetLayoutCreateInfo createInfo = {};
+        createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+        createInfo.bindingCount = bindingSet.size();
+        createInfo.pBindings = createInfo.bindingCount ? bindingSet.data() : NULL;
+
+        VkDescriptorSetLayout result = VK_NULL_HANDLE;
+        vulkan_utils::throwIfNotSuccess(vkCreateDescriptorSetLayout(mDevice,
+                                                                    &createInfo,
+                                                                    NULL,
+                                                                    &result),
+                                        "vkCreateDescriptorSetLayout");
+
+        return result;
+    }
+
+    VkPipeline kernel_module::createPipeline(const std::string& entryPoint, const WorkgroupDimensions& work_group_sizes) const {
+        const unsigned int num_workgroup_sizes = 3;
+        const int32_t workGroupSizes[num_workgroup_sizes] = {
+                std::get<0>(work_group_sizes),
+                std::get<1>(work_group_sizes),
+                1
+        };
+        const VkSpecializationMapEntry specializationEntries[num_workgroup_sizes] = {
+                {
+                        0,                          // specialization constant 0 - workgroup size X
+                        0*sizeof(int32_t),          // offset - start of workGroupSizes array
+                        sizeof(workGroupSizes[0])   // sizeof the first element
+                },
+                {
+                        1,                          // specialization constant 1 - workgroup size Y
+                        1*sizeof(int32_t),            // offset - one element into the array
+                        sizeof(workGroupSizes[1])   // sizeof the second element
+                },
+                {
+                        2,                          // specialization constant 2 - workgroup size Z
+                        2*sizeof(int32_t),          // offset - two elements into the array
+                        sizeof(workGroupSizes[2])   // sizeof the second element
+                }
+        };
+        VkSpecializationInfo specializationInfo = {};
+        specializationInfo.mapEntryCount = num_workgroup_sizes;
+        specializationInfo.pMapEntries = specializationEntries;
+        specializationInfo.dataSize = sizeof(workGroupSizes);
+        specializationInfo.pData = workGroupSizes;
+
+        VkComputePipelineCreateInfo createInfo = {};
+        createInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+        createInfo.layout = mPipelineLayout.pipeline;
+
+        createInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+        createInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+        createInfo.stage.module = mShaderModule;
+        createInfo.stage.pName = entryPoint.c_str();
+        createInfo.stage.pSpecializationInfo = &specializationInfo;
+
+        VkPipeline result = VK_NULL_HANDLE;
+        vulkan_utils::throwIfNotSuccess(vkCreateComputePipelines(mDevice,
+                                                                 VK_NULL_HANDLE,
+                                                                 1,
+                                                                 &createInfo,
+                                                                 NULL,
+                                                                 &result),
+                                        "vkCreateComputePipelines");
+
+        return result;
+    }
+
+    void kernel_module::bindDescriptors(VkCommandBuffer command) const {
+        vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                mPipelineLayout.pipeline,
+                                0,
+                                mDescriptors.size(), mDescriptors.data(),
+                                0, NULL);
+    }
+
+    kernel::kernel(VkDevice                     device,
+                   const kernel_module&         module,
+                   std::string                  entryPoint,
+                   const WorkgroupDimensions&   workgroup_sizes) :
+            mDevice(device),
+            mPipeline(VK_NULL_HANDLE),
+            mLiteralSamplerDescSet(VK_NULL_HANDLE),
+            mArgumentDescSet(VK_NULL_HANDLE){
+        mLiteralSamplerDescSet = module.getLiteralSamplersDescriptorSet();
+        mArgumentDescSet = module.getKernelArgumentDescriptorSet(entryPoint);
+        mPipeline = module.createPipeline(entryPoint, workgroup_sizes);
+    }
+
+    kernel::~kernel() {
+        if (mDevice) {
+            if (mPipeline) {
+                vkDestroyPipeline(mDevice, mPipeline, NULL);
+            }
+        }
+    }
+
+    void kernel::bindPipeline(VkCommandBuffer command) const {
+        vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, mPipeline);
+    }
+
+    kernel_invocation::kernel_invocation(VkDevice           device,
+                                         VkCommandPool      cmdPool,
+                                         const VkPhysicalDeviceMemoryProperties&    memoryProperties) :
+            mDevice(device),
+            mCmdPool(cmdPool),
+            mMemoryProperties(memoryProperties),
+            mCommand(VK_NULL_HANDLE),
+            mLiteralSamplers(),
+            mArguments() {
+        mCommand = allocate_command_buffer(mDevice, mCmdPool);
+    }
+
+    kernel_invocation::~kernel_invocation() {
+        std::for_each(mPodBuffers.begin(), mPodBuffers.end(), std::mem_fun_ref(&vulkan_utils::buffer::reset));
+
+        if (mDevice) {
+            if (mCmdPool && mCommand) {
+                vkFreeCommandBuffers(mDevice, mCmdPool, 1, &mCommand);
+            }
+        }
+    }
+
+    void kernel_invocation::addBufferArgument(VkBuffer buf) {
+        arg item = {};
+
+        item.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        item.buffer = buf;
+
+        mArguments.push_back(item);
+    }
+
+    void kernel_invocation::addSamplerArgument(VkSampler samp) {
+        arg item = {};
+
+        item.type = VK_DESCRIPTOR_TYPE_SAMPLER;
+        item.sampler = samp;
+
+        mArguments.push_back(item);
+    }
+
+    void kernel_invocation::addReadOnlyImageArgument(VkImageView im) {
+        arg item = {};
+
+        item.type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+        item.image = im;
+
+        mArguments.push_back(item);
+    }
+
+    void kernel_invocation::addWriteOnlyImageArgument(VkImageView im) {
+        arg item = {};
+
+        item.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+        item.image = im;
+
+        mArguments.push_back(item);
+    }
+
+    void kernel_invocation::updateDescriptorSets(VkDescriptorSet literalSamplerDescSet,
+                                                 VkDescriptorSet argumentDescSet) {
+        std::vector<VkDescriptorImageInfo>  imageList;
+        std::vector<VkDescriptorBufferInfo> bufferList;
+
+        //
+        // Collect information about the literal samplers
+        //
+        for (auto s : mLiteralSamplers) {
+            VkDescriptorImageInfo samplerInfo = {};
+            samplerInfo.sampler = s;
+
+            imageList.push_back(samplerInfo);
+        }
+
+        //
+        // Collect information about the arguments
+        //
+        for (auto& a : mArguments) {
+            switch (a.type) {
+                case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+                case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE: {
+                    VkDescriptorImageInfo imageInfo = {};
+                    imageInfo.imageView = a.image;
+                    imageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
+
+                    imageList.push_back(imageInfo);
+                    break;
+                }
+
+                case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: {
+                    VkDescriptorBufferInfo bufferInfo = {};
+                    bufferInfo.range = VK_WHOLE_SIZE;
+                    bufferInfo.buffer = a.buffer;
+
+                    bufferList.push_back(bufferInfo);
+                    break;
+                }
+
+                case VK_DESCRIPTOR_TYPE_SAMPLER: {
+                    VkDescriptorImageInfo samplerInfo = {};
+                    samplerInfo.sampler = a.sampler;
+
+                    imageList.push_back(samplerInfo);
+                    break;
+                }
+
+                default:
+                    assert(0 && "unkown argument type");
+            }
+        }
+
+        //
+        // Set up to create the descriptor set write structures
+        // We will iterate the param lists in the same order,
+        // picking up image and buffer infos in order.
+        //
+
+        std::vector<VkWriteDescriptorSet> writeSets;
+        auto nextImage = imageList.begin();
+        auto nextBuffer = bufferList.begin();
+
+
+        //
+        // Update the literal samplers' descriptor set
+        //
+
+        VkWriteDescriptorSet literalSamplerSet = {};
+        literalSamplerSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        literalSamplerSet.dstSet = literalSamplerDescSet;
+        literalSamplerSet.dstBinding = 0;
+        literalSamplerSet.descriptorCount = 1;
+        literalSamplerSet.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+
+        assert(mLiteralSamplers.empty() || literalSamplerDescSet);
+
+        for (auto s : mLiteralSamplers) {
+            literalSamplerSet.pImageInfo = &(*nextImage);
+            ++nextImage;
+
+            writeSets.push_back(literalSamplerSet);
+
+            ++literalSamplerSet.dstBinding;
+        }
+
+        //
+        // Update the kernel's argument descriptor set
+        //
+
+        VkWriteDescriptorSet argSet = {};
+        argSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+        argSet.dstSet = argumentDescSet;
+        argSet.dstBinding = 0;
+        argSet.descriptorCount = 1;
+
+        assert(mArguments.empty() || argumentDescSet);
+
+        for (auto& a : mArguments) {
+            switch (a.type) {
+                case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
+                case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
+                    argSet.descriptorType = a.type;
+                    argSet.pImageInfo = &(*nextImage);
+                    ++nextImage;
+                    break;
+
+                case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
+                    argSet.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                    argSet.pBufferInfo = &(*nextBuffer);
+                    ++nextBuffer;
+                    break;
+
+                case VK_DESCRIPTOR_TYPE_SAMPLER:
+                    argSet.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
+                    argSet.pImageInfo = &(*nextImage);
+                    ++nextImage;
+                    break;
+
+                default:
+                    assert(0 && "unkown argument type");
+            }
+
+            writeSets.push_back(argSet);
+
+            ++argSet.dstBinding;
+        }
+
+        //
+        // Do the actual descriptor set updates
+        //
+        vkUpdateDescriptorSets(mDevice, writeSets.size(), writeSets.data(), 0, nullptr);
+    }
+
+    void kernel_invocation::fillCommandBuffer(const kernel_module&          module,
+                                              const kernel&                 inKernel,
+                                              const WorkgroupDimensions&    num_workgroups) {
+        VkCommandBufferBeginInfo beginInfo = {};
+        beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+        vulkan_utils::throwIfNotSuccess(vkBeginCommandBuffer(mCommand, &beginInfo),
+                                        "vkBeginCommandBuffer");
+
+        inKernel.bindPipeline(mCommand);
+        module.bindDescriptors(mCommand);
+
+        vkCmdDispatch(mCommand, std::get<0>(num_workgroups), std::get<1>(num_workgroups), 1);
+
+        vulkan_utils::throwIfNotSuccess(vkEndCommandBuffer(mCommand),
+                                        "vkEndCommandBuffer");
+    }
+
+    void kernel_invocation::submitCommand(VkQueue queue) {
+        VkSubmitInfo submitInfo = {};
+        submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+        submitInfo.commandBufferCount = 1;
+        submitInfo.pCommandBuffers = &mCommand;
+
+        vulkan_utils::throwIfNotSuccess(vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE),
+                                        "vkQueueSubmit");
+
+    }
+
+    void kernel_invocation::run(VkQueue                     queue,
+                                const kernel_module&        module,
+                                const kernel&               kern,
+                                const WorkgroupDimensions&  num_workgroups) {
+        updateDescriptorSets(kern.getLiteralSamplerDescSet(), kern.getArgumentDescSet());
+        fillCommandBuffer(module, kern, num_workgroups);
+        submitCommand(queue);
+
+        vkQueueWaitIdle(queue);
+    }
+
+} // namespace clspv_utils
+
+/* ============================================================================================== */
+
 template<class T>
 typename std::enable_if<!std::numeric_limits<T>::is_integer, bool>::type
 almost_equal(T x, T y, int ulp)
@@ -110,90 +1271,6 @@ std::pair<int,int> operator+=(std::pair<int,int>& l, const std::pair<int,int>& r
     l.first += r.first;
     l.second += r.second;
     return l;
-};
-
-/* ============================================================================================== */
-
-struct pipeline_layout {
-    pipeline_layout() : device(VK_NULL_HANDLE), descriptors(), pipeline(VK_NULL_HANDLE) {};
-
-    void    reset();
-
-    VkDevice                            device;
-    std::vector<VkDescriptorSetLayout>  descriptors;
-    VkPipelineLayout                    pipeline;
-};
-
-struct device_memory {
-    device_memory() : device(VK_NULL_HANDLE), mem(VK_NULL_HANDLE) {}
-    device_memory(VkDevice                                  dev,
-                  const VkMemoryRequirements&               mem_reqs,
-                  const VkPhysicalDeviceMemoryProperties    memoryProperties)
-            : device_memory() {
-        allocate(dev, mem_reqs, memoryProperties);
-    };
-
-    void    allocate(VkDevice                                   dev,
-                     const VkMemoryRequirements&                mem_reqs,
-                     const VkPhysicalDeviceMemoryProperties&    memory_properties);
-    void    reset();
-
-    VkDevice        device;
-    VkDeviceMemory  mem;
-};
-
-struct buffer {
-    buffer() : mem(), buf(VK_NULL_HANDLE) {}
-    buffer(const sample_info &info, VkDeviceSize num_bytes) : buffer(info.device, info.memory_properties, num_bytes) {}
-
-    buffer(VkDevice dev, const VkPhysicalDeviceMemoryProperties memoryProperties, VkDeviceSize num_bytes) : buffer() {
-        allocate(dev, memoryProperties, num_bytes);
-    };
-
-    void    allocate(VkDevice dev, const VkPhysicalDeviceMemoryProperties& memory_properties, VkDeviceSize num_bytes);
-    void    reset();
-
-    device_memory   mem;
-    VkBuffer        buf;
-};
-
-struct image {
-    image() : mem(), im(VK_NULL_HANDLE), view(VK_NULL_HANDLE) {}
-    image(const sample_info&  info,
-          uint32_t      width,
-          uint32_t      height,
-          VkFormat      format) : image(info.device, info.memory_properties, width, height, format) {}
-
-    image(VkDevice dev,
-          const VkPhysicalDeviceMemoryProperties memoryProperties,
-          uint32_t                                   width,
-          uint32_t                                   height,
-          VkFormat                                   format) : image() {
-        allocate(dev, memoryProperties, width, height, format);
-    };
-
-    void    allocate(VkDevice                                   dev,
-                     const VkPhysicalDeviceMemoryProperties&    memory_properties,
-                     uint32_t                                   width,
-                     uint32_t                                   height,
-                     VkFormat                                   format);
-    void    reset();
-
-    device_memory   mem;
-    VkImage         im;
-    VkImageView     view;
-};
-
-struct memory_map {
-    memory_map(VkDevice dev, VkDeviceMemory mem);
-    memory_map(const device_memory& mem) : memory_map(mem.device, mem.mem) {}
-    memory_map(const buffer& buf) : memory_map(buf.mem) {}
-    memory_map(const image& im) : memory_map(im.mem) {}
-    ~memory_map();
-
-    VkDevice        dev;
-    VkDeviceMemory  mem;
-    void*           data;
 };
 
 /* ============================================================================================== */
@@ -324,44 +1401,6 @@ static_assert(sizeof(uchar2) == 2, "bad size for uchar2");
 
 typedef vec4<uchar> uchar4;
 static_assert(sizeof(uchar4) == 4, "bad size for uchar4");
-
-/* ============================================================================================== */
-
-struct spv_map {
-    struct sampler {
-        sampler() : opencl_flags(0), binding(-1) {};
-
-        int opencl_flags;
-        int binding;
-    };
-
-    struct arg {
-        enum kind_t { kind_unknown, kind_pod, kind_buffer, kind_ro_image, kind_wo_image, kind_sampler };
-
-        arg() : kind(kind_unknown), binding(-1), offset(0) {};
-
-        kind_t  kind;
-        int     binding;
-        int     offset;
-    };
-
-    struct kernel {
-        kernel() : name(), descriptor_set(-1), args() {};
-
-        std::string         name;
-        int                 descriptor_set;
-        std::vector<arg>    args;
-    };
-
-    static arg::kind_t parse_argType(const std::string& argType);
-    static spv_map   parse(std::istream& in);
-
-    spv_map() : samplers(), kernels(), samplers_desc_set(-1) {};
-
-    std::vector<sampler>    samplers;
-    int                     samplers_desc_set;
-    std::vector<kernel>     kernels;
-};
 
 /* ============================================================================================== */
 
@@ -812,156 +1851,6 @@ struct pixel_traits<uchar4> {
     }
 };
 
-class kernel_module {
-public:
-    typedef std::tuple<int,int> WorkgroupDimensions;
-
-public:
-    kernel_module(VkDevice              device,
-                  VkDescriptorPool      pool,
-                  const std::string&    moduleName);
-
-    ~kernel_module();
-
-    VkDescriptorSet getLiteralSamplersDescriptorSet() const;
-    VkDescriptorSet getKernelArgumentDescriptorSet(const std::string& entryPoint) const;
-
-    VkPipeline      createPipeline(const std::string&           entryPoint,
-                                   const WorkgroupDimensions&   work_group_sizes) const;
-
-    void bindDescriptors(VkCommandBuffer command) const;
-
-private:
-    std::vector<VkDescriptorSet>    allocateDescriptorSet(VkDescriptorPool pool) const;
-    VkDescriptorSetLayout           createDescriptorSetLayout(const std::vector<VkDescriptorType>& descriptorTypes);
-    pipeline_layout                 createPipelineLayout(const spv_map& spvMap);
-
-private:
-    pipeline_layout                     mPipelineLayout;
-
-    VkDevice                            mDevice;
-    std::vector<VkDescriptorSet>        mDescriptors;
-    VkDescriptorPool                    mDescriptorPool;
-    VkShaderModule                      mShaderModule;
-    spv_map                             mSpvMap;
-};
-
-class kernel {
-public:
-    typedef kernel_module::WorkgroupDimensions WorkgroupDimensions;
-
-public:
-    kernel(VkDevice                     device,
-           const kernel_module&         module,
-           std::string                  entryPoint,
-           const WorkgroupDimensions&   workgroup_sizes);
-
-    ~kernel();
-
-    void bindPipeline(VkCommandBuffer command) const;
-
-    VkDescriptorSet getLiteralSamplerDescSet() const { return mLiteralSamplerDescSet; }
-    VkDescriptorSet getArgumentDescSet() const { return mArgumentDescSet; }
-
-private:
-    VkDescriptorSetLayout   createDescriptorSetLayout(const std::vector<VkDescriptorType>& descriptorTypes);
-    VkPipeline              createPipeline(const std::tuple<int,int>& work_group_sizes);
-
-private:
-    VkDevice        mDevice;
-    VkPipeline      mPipeline;
-    VkDescriptorSet mLiteralSamplerDescSet;
-    VkDescriptorSet mArgumentDescSet;
-};
-
-class kernel_invocation {
-public:
-    typedef kernel::WorkgroupDimensions WorkgroupDimensions;
-
-public:
-    kernel_invocation(VkDevice              device,
-                      VkCommandPool         cmdPool,
-                      const VkPhysicalDeviceMemoryProperties&   memoryProperties);
-
-    ~kernel_invocation();
-
-    template <typename Iterator>
-    void    addLiteralSamplers(Iterator first, Iterator last);
-
-    void    addBufferArgument(VkBuffer buf);
-    void    addReadOnlyImageArgument(VkImageView image);
-    void    addWriteOnlyImageArgument(VkImageView image);
-    void    addSamplerArgument(VkSampler samp);
-
-    template <typename T>
-    void    addPodArgument(const T& pod);
-
-    void    run(VkQueue                     queue,
-                const kernel_module&        module,
-                const kernel&               kern,
-                const WorkgroupDimensions&  num_workgroups);
-
-private:
-    void        fillCommandBuffer(const kernel_module&          module,
-                                  const kernel&                 kern,
-                                  const WorkgroupDimensions&    num_workgroups);
-    void        updateDescriptorSets(VkDescriptorSet literalSamplerSet,
-                                     VkDescriptorSet argumentSet);
-    void        submitCommand(VkQueue queue);
-
-private:
-    struct arg {
-        VkDescriptorType    type;
-        VkBuffer            buffer;
-        VkSampler           sampler;
-        VkImageView         image;
-    };
-
-private:
-    VkDevice                            mDevice;
-    VkCommandPool                       mCmdPool;
-    VkCommandBuffer                     mCommand;
-    VkPhysicalDeviceMemoryProperties    mMemoryProperties;
-
-    std::vector<VkSampler>              mLiteralSamplers;
-    std::vector<arg>                    mArguments;
-    std::vector<buffer>                 mPodBuffers;
-};
-
-template <typename Iterator>
-void kernel_invocation::addLiteralSamplers(Iterator first, Iterator last) {
-    mLiteralSamplers.insert(mLiteralSamplers.end(), first, last);
-}
-
-template <typename T>
-void kernel_invocation::addPodArgument(const T& pod) {
-    buffer scalar_args(mDevice, mMemoryProperties, sizeof(T));
-    mPodBuffers.push_back(scalar_args);
-
-    {
-        memory_map scalar_map(scalar_args);
-        memcpy(scalar_map.data, &pod, sizeof(T));
-    }
-
-    addBufferArgument(scalar_args.buf);
-}
-
-/* ============================================================================================== */
-
-class vulkan_error : public std::runtime_error {
-    VkResult    mResult;
-public:
-    vulkan_error(const std::string& s, VkResult result) : runtime_error(s), mResult(result) {}
-
-    inline VkResult get_result() const { return mResult; }
-};
-
-void throwIfNotVkSuccess(VkResult result, const std::string& label) {
-    if (VK_SUCCESS != result) {
-        throw vulkan_error(label, result);
-    }
-}
-
 /* ============================================================================================== */
 
 VKAPI_ATTR VkBool32 VKAPI_CALL dbgFunc(VkDebugReportFlagsEXT msgFlags, VkDebugReportObjectTypeEXT objType, uint64_t srcObject,
@@ -996,162 +1885,6 @@ VKAPI_ATTR VkBool32 VKAPI_CALL dbgFunc(VkDebugReportFlagsEXT msgFlags, VkDebugRe
 
 /* ============================================================================================== */
 
-std::string read_csv_field(std::istream& in) {
-    std::string result;
-
-    if (in.good()) {
-        const bool is_quoted = (in.peek() == '"');
-
-        if (is_quoted) {
-            in.ignore(std::numeric_limits<std::streamsize>::max(), '"');
-        }
-
-        std::getline(in, result, is_quoted ? '"' : ',');
-
-        if (is_quoted) {
-            in.ignore(std::numeric_limits<std::streamsize>::max(), ',');
-        }
-    }
-
-    return result;
-}
-
-spv_map::arg::kind_t spv_map::parse_argType(const std::string& argType) {
-    arg::kind_t result = arg::kind_unknown;
-
-    if (argType == "pod") {
-        result = arg::kind_pod;
-    }
-    else if (argType == "buffer") {
-        result = arg::kind_buffer;
-    }
-    else if (argType == "ro_image") {
-        result = arg::kind_ro_image;
-    }
-    else if (argType == "wo_image") {
-        result = arg::kind_wo_image;
-    }
-    else if (argType == "sampler") {
-        result = arg::kind_sampler;
-    }
-    else {
-        assert(0 && "unknown spvmap arg type");
-    }
-
-    return result;
-}
-
-spv_map spv_map::parse(std::istream& in) {
-    spv_map result;
-
-    while (!in.eof()) {
-        // read one line
-        std::string line;
-        std::getline(in, line);
-
-        std::istringstream in_line(line);
-        std::string key = read_csv_field(in_line);
-        std::string value = read_csv_field(in_line);
-        if ("sampler" == key) {
-            auto s = result.samplers.insert(result.samplers.end(), spv_map::sampler());
-            assert(s != result.samplers.end());
-
-            s->opencl_flags = std::atoi(value.c_str());
-
-            while (!in_line.eof()) {
-                key = read_csv_field(in_line);
-                value = read_csv_field(in_line);
-
-                if ("descriptorSet" == key) {
-                    // all samplers, if any, are documented to share descriptor set 0
-                    const int ds = std::atoi(value.c_str());
-                    assert(ds == 0);
-
-                    if (-1 == result.samplers_desc_set) {
-                        result.samplers_desc_set = ds;
-                    }
-                }
-                else if ("binding" == key) {
-                    s->binding = std::atoi(value.c_str());
-                }
-            }
-        }
-        else if ("kernel" == key) {
-            auto kernel = std::find_if(result.kernels.begin(), result.kernels.end(), [&value](const spv_map::kernel& iter) { return iter.name == value; });
-            if (kernel == result.kernels.end()) {
-                kernel = result.kernels.insert(kernel, spv_map::kernel());
-                kernel->name = value;
-            }
-            assert(kernel != result.kernels.end());
-
-            auto ka = kernel->args.end();
-
-            while (!in_line.eof()) {
-                key = read_csv_field(in_line);
-                value = read_csv_field(in_line);
-
-                if ("argOrdinal" == key) {
-                    assert(ka == kernel->args.end());
-
-                    const int arg_index = std::atoi(value.c_str());
-
-                    if (kernel->args.size() <= arg_index) {
-                        ka = kernel->args.insert(ka, arg_index - kernel->args.size() + 1, spv_map::arg());
-                    }
-                    else {
-                        ka = std::next(kernel->args.begin(), arg_index);
-                    }
-
-                    assert(ka != kernel->args.end());
-                }
-                else if ("descriptorSet" == key) {
-                    const int ds = std::atoi(value.c_str());
-                    if (-1 == kernel->descriptor_set) {
-                        kernel->descriptor_set = ds;
-                    }
-
-                    // all args for a kernel are documented to share the same descriptor set
-                    assert(ds == kernel->descriptor_set);
-                }
-                else if ("binding" == key) {
-                    ka->binding = std::atoi(value.c_str());
-                }
-                else if ("offset" == key) {
-                    ka->offset = std::atoi(value.c_str());
-                }
-                else if ("argType" == key) {
-                    ka->kind = parse_argType(value);
-                }
-            }
-        }
-    }
-
-    std::sort(result.kernels.begin(),
-              result.kernels.end(),
-              [](const spv_map::kernel& a, const spv_map::kernel& b) {
-                  return a.descriptor_set < b.descriptor_set;
-              });
-
-    return result;
-}
-
-spv_map create_spv_map(const char* spvmapFilename) {
-    // Read the spvmap file into a string buffer
-    std::FILE *spvmap_file = AndroidFopen(spvmapFilename, "rb");
-    assert(spvmap_file != NULL);
-    std::fseek(spvmap_file, 0, SEEK_END);
-    std::string buffer(std::ftell(spvmap_file), ' ');
-    std::fseek(spvmap_file, 0, SEEK_SET);
-    std::fread(&buffer.front(), 1, buffer.length(), spvmap_file);
-    std::fclose(spvmap_file);
-
-    // parse the spvmap file contents
-    std::istringstream in(buffer);
-    return spv_map::parse(in);
-}
-
-/* ============================================================================================== */
-
 void init_compute_queue_family_index(struct sample_info &info) {
     /* This routine simply finds a compute queue for a later vkCreateDevice.
      */
@@ -1181,58 +1914,11 @@ void my_init_descriptor_pool(struct sample_info &info) {
     createInfo.pPoolSizes = type_count;
     createInfo.flags = VK_DESCRIPTOR_POOL_CREATE_FREE_DESCRIPTOR_SET_BIT;
 
-    throwIfNotVkSuccess(vkCreateDescriptorPool(info.device, &createInfo, NULL, &info.desc_pool),
-                        "vkCreateDescriptorPool");
-}
-
-VkShaderModule create_shader(VkDevice device, const char* spvFileName) {
-    std::FILE* spv_file = AndroidFopen(spvFileName, "rb");
-    assert(spv_file != NULL);
-
-    std::fseek(spv_file, 0, SEEK_END);
-    // Use vector of uint32_t to ensure alignment is satisfied.
-    const auto num_bytes = std::ftell(spv_file);
-    assert(0 == (num_bytes % sizeof(uint32_t)));
-    const auto num_words = (num_bytes + sizeof(uint32_t) - 1) / sizeof(uint32_t);
-    std::vector<uint32_t> spvModule(num_words);
-    assert(num_bytes == (spvModule.size() * sizeof(uint32_t)));
-
-    std::fseek(spv_file, 0, SEEK_SET);
-    std::fread(spvModule.data(), 1, num_bytes, spv_file);
-
-    std::fclose(spv_file);
-
-    VkShaderModuleCreateInfo shaderModuleCreateInfo = {};
-    shaderModuleCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
-    shaderModuleCreateInfo.codeSize = num_bytes;
-    shaderModuleCreateInfo.pCode = spvModule.data();
-
-    VkShaderModule shaderModule = VK_NULL_HANDLE;
-    throwIfNotVkSuccess(vkCreateShaderModule(device, &shaderModuleCreateInfo, NULL, &shaderModule),
-                        "vkCreateShaderModule");
-
-    return shaderModule;
-}
-
-uint32_t find_compatible_memory_index(const VkPhysicalDeviceMemoryProperties& memory_properties,
-                                      uint32_t   typeBits,
-                                      VkFlags    requirements_mask) {
-    uint32_t result = std::numeric_limits<uint32_t>::max();
-    assert(memory_properties.memoryTypeCount < std::numeric_limits<uint32_t>::max());
-
-    // Search memtypes to find first index with those properties
-    for (uint32_t i = 0; i < memory_properties.memoryTypeCount; i++) {
-        if ((typeBits & 1) == 1) {
-            // Type is available, does it match user properties?
-            if ((memory_properties.memoryTypes[i].propertyFlags & requirements_mask) == requirements_mask) {
-                result = i;
-                break;
-            }
-        }
-        typeBits >>= 1;
-    }
-
-    return result;
+    vulkan_utils::throwIfNotSuccess(vkCreateDescriptorPool(info.device,
+                                                           &createInfo,
+                                                           NULL,
+                                                           &info.desc_pool),
+                                    "vkCreateDescriptorPool");
 }
 
 VkSampler create_compatible_sampler(VkDevice device, int opencl_flags) {
@@ -1268,667 +1954,10 @@ VkSampler create_compatible_sampler(VkDevice device, int opencl_flags) {
     samplerCreateInfo.unnormalizedCoordinates = unnormalizedCoordinates;
 
     VkSampler result = VK_NULL_HANDLE;
-    throwIfNotVkSuccess(vkCreateSampler(device, &samplerCreateInfo, NULL, &result),
-                        "vkCreateSampler");
+    vulkan_utils::throwIfNotSuccess(vkCreateSampler(device, &samplerCreateInfo, NULL, &result),
+                                    "vkCreateSampler");
 
     return result;
-}
-
-VkCommandBuffer allocate_command_buffer(VkDevice device, VkCommandPool cmd_pool) {
-    VkCommandBufferAllocateInfo allocInfo = {};
-    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
-    allocInfo.commandPool = cmd_pool;
-    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
-    allocInfo.commandBufferCount = 1;
-
-    VkCommandBuffer result = VK_NULL_HANDLE;
-    throwIfNotVkSuccess(vkAllocateCommandBuffers(device, &allocInfo, &result),
-                        "vkAllocateCommandBuffers");
-
-    return result;
-}
-
-/* ============================================================================================== */
-
-memory_map::memory_map(VkDevice device, VkDeviceMemory memory) :
-        dev(device), mem(memory), data(nullptr)
-{
-    throwIfNotVkSuccess(vkMapMemory(device, memory, 0, VK_WHOLE_SIZE, 0, &data),
-                        "vkMapMemory");
-}
-
-memory_map::~memory_map() {
-    if (dev && mem) {
-        vkUnmapMemory(dev, mem);
-    }
-}
-
-/* ============================================================================================== */
-
-void device_memory::allocate(VkDevice                                   dev,
-                             const VkMemoryRequirements&                mem_reqs,
-                             const VkPhysicalDeviceMemoryProperties&    memory_properties) {
-    reset();
-
-    device = dev;
-
-    // Allocate memory for the buffer
-    VkMemoryAllocateInfo alloc_info = {};
-    alloc_info.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
-    alloc_info.allocationSize = mem_reqs.size;
-    alloc_info.memoryTypeIndex = find_compatible_memory_index(memory_properties,
-                                                              mem_reqs.memoryTypeBits,
-                                                              VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
-    assert(alloc_info.memoryTypeIndex < std::numeric_limits<uint32_t>::max() && "No mappable, coherent memory");
-    throwIfNotVkSuccess(vkAllocateMemory(device, &alloc_info, NULL, &mem),
-                        "vkAllocateMemory");
-}
-
-void device_memory::reset() {
-    if (mem != VK_NULL_HANDLE) {
-        vkFreeMemory(device, mem, NULL);
-        mem = VK_NULL_HANDLE;
-    }
-
-    device = VK_NULL_HANDLE;
-}
-
-
-/* ============================================================================================== */
-
-void buffer::allocate(VkDevice                                  dev,
-                      const VkPhysicalDeviceMemoryProperties&   memory_properties,
-                      VkDeviceSize                              inNumBytes) {
-    reset();
-
-    // Allocate the buffer
-    VkBufferCreateInfo buf_info = {};
-    buf_info.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
-    buf_info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
-    buf_info.size = inNumBytes;
-    buf_info.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-
-    throwIfNotVkSuccess(vkCreateBuffer(dev, &buf_info, NULL, &buf),
-                        "vkCreateBuffer");
-
-    // Find out what we need in order to allocate memory for the buffer
-    VkMemoryRequirements mem_reqs = {};
-    vkGetBufferMemoryRequirements(dev, buf, &mem_reqs);
-
-    mem.allocate(dev, mem_reqs, memory_properties);
-
-    // Bind the memory to the buffer object
-    throwIfNotVkSuccess(vkBindBufferMemory(dev, buf, mem.mem, 0),
-                        "vkBindBufferMemory");
-}
-
-void buffer::reset() {
-    if (buf != VK_NULL_HANDLE) {
-        vkDestroyBuffer(mem.device, buf, NULL);
-        buf = VK_NULL_HANDLE;
-    }
-
-    mem.reset();
-}
-
-/* ============================================================================================== */
-
-void image::allocate(VkDevice                                   dev,
-                     const VkPhysicalDeviceMemoryProperties&    memory_properties,
-                     uint32_t                                   width,
-                     uint32_t                                   height,
-                     VkFormat                                   format) {
-    reset();
-
-    VkImageCreateInfo imageInfo = {};
-    imageInfo.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO;
-    imageInfo.imageType = VK_IMAGE_TYPE_2D;
-    imageInfo.format = format;
-    imageInfo.extent.width = width;
-    imageInfo.extent.height = height;
-    imageInfo.extent.depth = 1;
-    imageInfo.mipLevels = 1;
-    imageInfo.arrayLayers = 1;
-    imageInfo.samples = VK_SAMPLE_COUNT_1_BIT;
-    imageInfo.tiling = VK_IMAGE_TILING_LINEAR;
-    imageInfo.usage = VK_IMAGE_USAGE_STORAGE_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
-    imageInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
-    imageInfo.initialLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-    throwIfNotVkSuccess(vkCreateImage(dev, &imageInfo, nullptr, &im),
-                        "vkCreateImage");
-
-    // Find out what we need in order to allocate memory for the image
-    VkMemoryRequirements mem_reqs = {};
-    vkGetImageMemoryRequirements(dev, im, &mem_reqs);
-
-    mem.allocate(dev, mem_reqs, memory_properties);
-
-    // Bind the memory to the image object
-    throwIfNotVkSuccess(vkBindImageMemory(dev, im, mem.mem, 0),
-                        "vkBindImageMemory");
-
-    // Allocate the image view
-    VkImageViewCreateInfo viewInfo = {};
-    viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
-    viewInfo.image = im;
-    viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
-    viewInfo.format = format;
-    viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
-    viewInfo.subresourceRange.levelCount = 1;
-
-    throwIfNotVkSuccess(vkCreateImageView(dev, &viewInfo, nullptr, &view),
-                        "vkCreateImageView");
-}
-
-void image::reset() {
-    if (view != VK_NULL_HANDLE) {
-        vkDestroyImageView(mem.device, view, NULL);
-        view = VK_NULL_HANDLE;
-    }
-    if (im != VK_NULL_HANDLE) {
-        vkDestroyImage(mem.device, im, NULL);
-        im = VK_NULL_HANDLE;
-    }
-
-    mem.reset();
-}
-
-/* ============================================================================================== */
-
-void pipeline_layout::reset() {
-    std::for_each(descriptors.begin(), descriptors.end(), std::bind(vkDestroyDescriptorSetLayout, device, std::placeholders::_1, nullptr));
-    descriptors.clear();
-
-    if (VK_NULL_HANDLE != device && VK_NULL_HANDLE != pipeline) {
-        vkDestroyPipelineLayout(device, pipeline, NULL);
-    }
-
-    device = VK_NULL_HANDLE;
-    pipeline = VK_NULL_HANDLE;
-}
-
-/* ============================================================================================== */
-
-kernel_module::kernel_module(VkDevice           device,
-                             VkDescriptorPool   pool,
-                             const std::string& moduleName) :
-        mPipelineLayout(),
-        mDevice(device),
-        mDescriptors(),
-        mDescriptorPool(pool),
-        mShaderModule(VK_NULL_HANDLE),
-        mSpvMap() {
-    const std::string spvFilename = moduleName + ".spv";
-    mShaderModule = create_shader(device, spvFilename.c_str());
-
-    const std::string mapFilename = moduleName + ".spvmap";
-    mSpvMap = create_spv_map(mapFilename.c_str());
-
-    mPipelineLayout = createPipelineLayout(mSpvMap);
-    mDescriptors = allocateDescriptorSet(pool);
-}
-
-kernel_module::~kernel_module() {
-    if (mDevice) {
-        if (!mDescriptors.empty()) {
-            VkResult U_ASSERT_ONLY res = vkFreeDescriptorSets(mDevice,
-                                                              mDescriptorPool,
-                                                              mDescriptors.size(),
-                                                              mDescriptors.data());
-            assert(res == VK_SUCCESS);
-        }
-
-        if (mShaderModule) {
-            vkDestroyShaderModule(mDevice, mShaderModule, NULL);
-        }
-    }
-
-    mPipelineLayout.reset();
-}
-
-VkDescriptorSet kernel_module::getLiteralSamplersDescriptorSet() const {
-    VkDescriptorSet result = VK_NULL_HANDLE;
-
-    if (-1 != mSpvMap.samplers_desc_set) {
-        result = mDescriptors[mSpvMap.samplers_desc_set];
-    }
-
-    return result;
-}
-
-VkDescriptorSet kernel_module::getKernelArgumentDescriptorSet(const std::string& entryPoint) const {
-    VkDescriptorSet result = VK_NULL_HANDLE;
-
-    const auto kernel_arg_map = std::find_if(mSpvMap.kernels.begin(),
-                                             mSpvMap.kernels.end(),
-                                             [&entryPoint](const spv_map::kernel& k) {
-                                                 return k.name == entryPoint;
-                                             });
-    if (kernel_arg_map != mSpvMap.kernels.end() && -1 != kernel_arg_map->descriptor_set) {
-        result = mDescriptors[kernel_arg_map->descriptor_set];
-    }
-
-    return result;
-
-}
-
-std::vector<VkDescriptorSet> kernel_module::allocateDescriptorSet(VkDescriptorPool pool) const {
-    std::vector<VkDescriptorSet> result;
-
-    VkDescriptorSetAllocateInfo createInfo = {};
-    createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-    createInfo.descriptorPool = pool;
-    createInfo.descriptorSetCount = mPipelineLayout.descriptors.size();
-    createInfo.pSetLayouts = mPipelineLayout.descriptors.data();
-
-    result.resize(createInfo.descriptorSetCount, VK_NULL_HANDLE);
-    throwIfNotVkSuccess(vkAllocateDescriptorSets(mDevice, &createInfo, result.data()),
-                        "vkAllocateDescriptorSets");
-
-    return result;
-}
-
-pipeline_layout kernel_module::createPipelineLayout(const spv_map& spvMap) {
-    pipeline_layout result;
-    result.device = mDevice;
-
-    std::vector<VkDescriptorType> descriptorTypes;
-
-    const int num_samplers = spvMap.samplers.size();
-    if (0 < num_samplers) {
-        descriptorTypes.clear();
-        descriptorTypes.resize(num_samplers, VK_DESCRIPTOR_TYPE_SAMPLER);
-        result.descriptors.push_back(createDescriptorSetLayout(descriptorTypes));
-    }
-
-    for (auto &k : spvMap.kernels) {
-        descriptorTypes.clear();
-
-
-        for (auto &ka : k.args) {
-            // ignore any argument not in offset 0
-            if (0 != ka.offset) continue;
-
-            VkDescriptorType argType;
-
-            switch (ka.kind) {
-                case spv_map::arg::kind_pod:
-                case spv_map::arg::kind_buffer:
-                    argType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                    break;
-
-                case spv_map::arg::kind_ro_image:
-                    argType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-                    break;
-
-                case spv_map::arg::kind_wo_image:
-                    argType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                    break;
-
-                case spv_map::arg::kind_sampler:
-                    argType = VK_DESCRIPTOR_TYPE_SAMPLER;
-                    break;
-
-                default:
-                    assert(0 && "unkown argument type");
-            }
-
-            descriptorTypes.push_back(argType);
-        }
-        result.descriptors.push_back(createDescriptorSetLayout(descriptorTypes));
-    };
-
-    VkPipelineLayoutCreateInfo createInfo = {};
-    createInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-    createInfo.setLayoutCount = result.descriptors.size();
-    createInfo.pSetLayouts = createInfo.setLayoutCount ? result.descriptors.data() : NULL;
-
-    throwIfNotVkSuccess(vkCreatePipelineLayout(mDevice, &createInfo, NULL, &result.pipeline),
-                        "vkCreatePipelineLayout");
-
-    return result;
-}
-
-VkDescriptorSetLayout kernel_module::createDescriptorSetLayout(const std::vector<VkDescriptorType>& descriptorTypes) {
-    std::vector<VkDescriptorSetLayoutBinding> bindingSet;
-
-    VkDescriptorSetLayoutBinding binding = {};
-    binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-    binding.descriptorCount = 1;
-    binding.binding = 0;
-
-    for (auto type : descriptorTypes) {
-        binding.descriptorType = type;
-        bindingSet.push_back(binding);
-
-        ++binding.binding;
-    }
-
-    VkDescriptorSetLayoutCreateInfo createInfo = {};
-    createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-    createInfo.bindingCount = bindingSet.size();
-    createInfo.pBindings = createInfo.bindingCount ? bindingSet.data() : NULL;
-
-    VkDescriptorSetLayout result = VK_NULL_HANDLE;
-    throwIfNotVkSuccess(vkCreateDescriptorSetLayout(mDevice, &createInfo, NULL, &result),
-                        "vkCreateDescriptorSetLayout");
-
-    return result;
-}
-
-VkPipeline kernel_module::createPipeline(const std::string& entryPoint, const WorkgroupDimensions& work_group_sizes) const {
-    const unsigned int num_workgroup_sizes = 3;
-    const int32_t workGroupSizes[num_workgroup_sizes] = {
-            std::get<0>(work_group_sizes),
-            std::get<1>(work_group_sizes),
-            1
-    };
-    const VkSpecializationMapEntry specializationEntries[num_workgroup_sizes] = {
-            {
-                    0,                          // specialization constant 0 - workgroup size X
-                    0*sizeof(int32_t),          // offset - start of workGroupSizes array
-                    sizeof(workGroupSizes[0])   // sizeof the first element
-            },
-            {
-                    1,                          // specialization constant 1 - workgroup size Y
-                    1*sizeof(int32_t),            // offset - one element into the array
-                    sizeof(workGroupSizes[1])   // sizeof the second element
-            },
-            {
-                    2,                          // specialization constant 2 - workgroup size Z
-                    2*sizeof(int32_t),          // offset - two elements into the array
-                    sizeof(workGroupSizes[2])   // sizeof the second element
-            }
-    };
-    VkSpecializationInfo specializationInfo = {};
-    specializationInfo.mapEntryCount = num_workgroup_sizes;
-    specializationInfo.pMapEntries = specializationEntries;
-    specializationInfo.dataSize = sizeof(workGroupSizes);
-    specializationInfo.pData = workGroupSizes;
-
-    VkComputePipelineCreateInfo createInfo = {};
-    createInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-    createInfo.layout = mPipelineLayout.pipeline;
-
-    createInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-    createInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-    createInfo.stage.module = mShaderModule;
-    createInfo.stage.pName = entryPoint.c_str();
-    createInfo.stage.pSpecializationInfo = &specializationInfo;
-
-    VkPipeline result = VK_NULL_HANDLE;
-    throwIfNotVkSuccess(vkCreateComputePipelines(mDevice, VK_NULL_HANDLE, 1, &createInfo, NULL, &result),
-                        "vkCreateComputePipelines");
-
-    return result;
-}
-
-void kernel_module::bindDescriptors(VkCommandBuffer command) const {
-    vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE,
-                            mPipelineLayout.pipeline,
-                            0,
-                            mDescriptors.size(), mDescriptors.data(),
-                            0, NULL);
-}
-
-/* ============================================================================================== */
-
-kernel::kernel(VkDevice                     device,
-               const kernel_module&         module,
-               std::string                  entryPoint,
-               const WorkgroupDimensions&   workgroup_sizes) :
-        mDevice(device),
-        mPipeline(VK_NULL_HANDLE),
-        mLiteralSamplerDescSet(VK_NULL_HANDLE),
-        mArgumentDescSet(VK_NULL_HANDLE){
-    mLiteralSamplerDescSet = module.getLiteralSamplersDescriptorSet();
-    mArgumentDescSet = module.getKernelArgumentDescriptorSet(entryPoint);
-    mPipeline = module.createPipeline(entryPoint, workgroup_sizes);
-}
-
-kernel::~kernel() {
-    if (mDevice) {
-        if (mPipeline) {
-            vkDestroyPipeline(mDevice, mPipeline, NULL);
-        }
-    }
-}
-
-void kernel::bindPipeline(VkCommandBuffer command) const {
-    vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, mPipeline);
-}
-
-/* ============================================================================================== */
-
-kernel_invocation::kernel_invocation(VkDevice           device,
-                                     VkCommandPool      cmdPool,
-                                     const VkPhysicalDeviceMemoryProperties&    memoryProperties) :
-        mDevice(device),
-        mCmdPool(cmdPool),
-        mMemoryProperties(memoryProperties),
-        mCommand(VK_NULL_HANDLE),
-        mLiteralSamplers(),
-        mArguments() {
-    mCommand = allocate_command_buffer(mDevice, mCmdPool);
-}
-
-kernel_invocation::~kernel_invocation() {
-    std::for_each(mPodBuffers.begin(), mPodBuffers.end(), std::mem_fun_ref(&buffer::reset));
-
-    if (mDevice) {
-        if (mCmdPool && mCommand) {
-            vkFreeCommandBuffers(mDevice, mCmdPool, 1, &mCommand);
-        }
-    }
-}
-
-void kernel_invocation::addBufferArgument(VkBuffer buf) {
-    arg item = {};
-
-    item.type = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-    item.buffer = buf;
-
-    mArguments.push_back(item);
-}
-
-void kernel_invocation::addSamplerArgument(VkSampler samp) {
-    arg item = {};
-
-    item.type = VK_DESCRIPTOR_TYPE_SAMPLER;
-    item.sampler = samp;
-
-    mArguments.push_back(item);
-}
-
-void kernel_invocation::addReadOnlyImageArgument(VkImageView im) {
-    arg item = {};
-
-    item.type = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-    item.image = im;
-
-    mArguments.push_back(item);
-}
-
-void kernel_invocation::addWriteOnlyImageArgument(VkImageView im) {
-    arg item = {};
-
-    item.type = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-    item.image = im;
-
-    mArguments.push_back(item);
-}
-
-void kernel_invocation::updateDescriptorSets(VkDescriptorSet literalSamplerDescSet,
-                                             VkDescriptorSet argumentDescSet) {
-    std::vector<VkDescriptorImageInfo>  imageList;
-    std::vector<VkDescriptorBufferInfo> bufferList;
-
-    //
-    // Collect information about the literal samplers
-    //
-    for (auto s : mLiteralSamplers) {
-        VkDescriptorImageInfo samplerInfo = {};
-        samplerInfo.sampler = s;
-
-        imageList.push_back(samplerInfo);
-    }
-
-    //
-    // Collect information about the arguments
-    //
-    for (auto& a : mArguments) {
-        switch (a.type) {
-            case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
-            case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE: {
-                VkDescriptorImageInfo imageInfo = {};
-                imageInfo.imageView = a.image;
-                imageInfo.imageLayout = VK_IMAGE_LAYOUT_GENERAL;
-
-                imageList.push_back(imageInfo);
-                break;
-            }
-
-            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER: {
-                VkDescriptorBufferInfo bufferInfo = {};
-                bufferInfo.range = VK_WHOLE_SIZE;
-                bufferInfo.buffer = a.buffer;
-
-                bufferList.push_back(bufferInfo);
-                break;
-            }
-
-            case VK_DESCRIPTOR_TYPE_SAMPLER: {
-                VkDescriptorImageInfo samplerInfo = {};
-                samplerInfo.sampler = a.sampler;
-
-                imageList.push_back(samplerInfo);
-                break;
-            }
-
-            default:
-                assert(0 && "unkown argument type");
-        }
-    }
-
-    //
-    // Set up to create the descriptor set write structures
-    // We will iterate the param lists in the same order,
-    // picking up image and buffer infos in order.
-    //
-
-    std::vector<VkWriteDescriptorSet> writeSets;
-    auto nextImage = imageList.begin();
-    auto nextBuffer = bufferList.begin();
-
-
-    //
-    // Update the literal samplers' descriptor set
-    //
-
-    VkWriteDescriptorSet literalSamplerSet = {};
-    literalSamplerSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    literalSamplerSet.dstSet = literalSamplerDescSet;
-    literalSamplerSet.dstBinding = 0;
-    literalSamplerSet.descriptorCount = 1;
-    literalSamplerSet.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-
-    assert(mLiteralSamplers.empty() || literalSamplerDescSet);
-
-    for (auto s : mLiteralSamplers) {
-        literalSamplerSet.pImageInfo = &(*nextImage);
-        ++nextImage;
-
-        writeSets.push_back(literalSamplerSet);
-
-        ++literalSamplerSet.dstBinding;
-    }
-
-    //
-    // Update the kernel's argument descriptor set
-    //
-
-    VkWriteDescriptorSet argSet = {};
-    argSet.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
-    argSet.dstSet = argumentDescSet;
-    argSet.dstBinding = 0;
-    argSet.descriptorCount = 1;
-
-    assert(mArguments.empty() || argumentDescSet);
-
-    for (auto& a : mArguments) {
-        switch (a.type) {
-            case VK_DESCRIPTOR_TYPE_STORAGE_IMAGE:
-            case VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE:
-                argSet.descriptorType = a.type;
-                argSet.pImageInfo = &(*nextImage);
-                ++nextImage;
-                break;
-
-            case VK_DESCRIPTOR_TYPE_STORAGE_BUFFER:
-                argSet.descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                argSet.pBufferInfo = &(*nextBuffer);
-                ++nextBuffer;
-                break;
-
-            case VK_DESCRIPTOR_TYPE_SAMPLER:
-                argSet.descriptorType = VK_DESCRIPTOR_TYPE_SAMPLER;
-                argSet.pImageInfo = &(*nextImage);
-                ++nextImage;
-                break;
-
-            default:
-                assert(0 && "unkown argument type");
-        }
-
-        writeSets.push_back(argSet);
-
-        ++argSet.dstBinding;
-    }
-
-    //
-    // Do the actual descriptor set updates
-    //
-    vkUpdateDescriptorSets(mDevice, writeSets.size(), writeSets.data(), 0, nullptr);
-}
-
-void kernel_invocation::fillCommandBuffer(const kernel_module&          module,
-                                          const kernel&                 inKernel,
-                                          const WorkgroupDimensions&    num_workgroups) {
-    VkCommandBufferBeginInfo beginInfo = {};
-    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-    throwIfNotVkSuccess(vkBeginCommandBuffer(mCommand, &beginInfo),
-                        "vkBeginCommandBuffer");
-
-    inKernel.bindPipeline(mCommand);
-    module.bindDescriptors(mCommand);
-
-    vkCmdDispatch(mCommand, std::get<0>(num_workgroups), std::get<1>(num_workgroups), 1);
-
-    throwIfNotVkSuccess(vkEndCommandBuffer(mCommand),
-                        "vkEndCommandBuffer");
-}
-
-void kernel_invocation::submitCommand(VkQueue queue) {
-    VkSubmitInfo submitInfo = {};
-    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
-    submitInfo.commandBufferCount = 1;
-    submitInfo.pCommandBuffers = &mCommand;
-
-    throwIfNotVkSuccess(vkQueueSubmit(queue, 1, &submitInfo, VK_NULL_HANDLE),
-                        "vkQueueSubmit");
-
-}
-
-void kernel_invocation::run(VkQueue                     queue,
-                            const kernel_module&        module,
-                            const kernel&               kern,
-                            const WorkgroupDimensions&  num_workgroups) {
-    updateDescriptorSets(kern.getLiteralSamplerDescSet(), kern.getArgumentDescSet());
-    fillCommandBuffer(module, kern, num_workgroups);
-    submitCommand(queue);
-
-    vkQueueWaitIdle(queue);
 }
 
 /* ============================================================================================== */
@@ -1974,9 +2003,9 @@ void run_fill_kernel(const sample_info&             info,
     const auto num_workgroups = std::make_tuple((scalars.inWidth + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
                                                 (scalars.inHeight + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
 
-    kernel_module     module(info.device, info.desc_pool, "fills");
-    kernel            kern(info.device, module, "FillWithColorKernel", workgroup_sizes);
-    kernel_invocation invocation(info.device, info.cmd_pool, info.memory_properties);
+    clspv_utils::kernel_module     module(info.device, info.desc_pool, "fills");
+    clspv_utils::kernel            kern(info.device, module, "FillWithColorKernel", workgroup_sizes);
+    clspv_utils::kernel_invocation invocation(info.device, info.cmd_pool, info.memory_properties);
 
     invocation.addLiteralSamplers(samplers.begin(), samplers.end());
     invocation.addBufferArgument(dst_buffer);
@@ -2030,9 +2059,9 @@ void run_copybuffertoimage_kernel(const sample_info& info,
     const auto num_workgroups = std::make_tuple((width + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
                                                 (height + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
 
-    kernel_module     module(info.device, info.desc_pool, "memory");
-    kernel            kern(info.device, module, "CopyBufferToImageKernel", workgroup_sizes);
-    kernel_invocation invocation(info.device, info.cmd_pool, info.memory_properties);
+    clspv_utils::kernel_module     module(info.device, info.desc_pool, "memory");
+    clspv_utils::kernel            kern(info.device, module, "CopyBufferToImageKernel", workgroup_sizes);
+    clspv_utils::kernel_invocation invocation(info.device, info.cmd_pool, info.memory_properties);
 
     invocation.addLiteralSamplers(samplers.begin(), samplers.end());
     invocation.addBufferArgument(src_buffer);
@@ -2084,9 +2113,9 @@ void run_copyimagetobuffer_kernel(const sample_info& info,
     const auto num_workgroups = std::make_tuple((width + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
                                                 (height + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
 
-    kernel_module     module(info.device, info.desc_pool, "memory");
-    kernel            kern(info.device, module, "CopyImageToBufferKernel", workgroup_sizes);
-    kernel_invocation invocation(info.device, info.cmd_pool, info.memory_properties);
+    clspv_utils::kernel_module     module(info.device, info.desc_pool, "memory");
+    clspv_utils::kernel            kern(info.device, module, "CopyImageToBufferKernel", workgroup_sizes);
+    clspv_utils::kernel_invocation invocation(info.device, info.cmd_pool, info.memory_properties);
 
     invocation.addLiteralSamplers(samplers.begin(), samplers.end());
     invocation.addReadOnlyImageArgument(src_image);
@@ -2098,7 +2127,7 @@ void run_copyimagetobuffer_kernel(const sample_info& info,
 
 std::tuple<int,int,int> run_localsize_kernel(const sample_info&             info,
                                              const std::vector<VkSampler>&  samplers,
-                                             const kernel_invocation::WorkgroupDimensions& workgroup_sizes) {
+                                             const clspv_utils::WorkgroupDimensions& workgroup_sizes) {
     struct scalar_args {
         int outWorkgroupX;  // offset 0
         int outWorkgroupY;  // offset 4
@@ -2108,20 +2137,20 @@ std::tuple<int,int,int> run_localsize_kernel(const sample_info&             info
     static_assert(4 == offsetof(scalar_args, outWorkgroupY), "outWorkgroupY offset incorrect");
     static_assert(8 == offsetof(scalar_args, outWorkgroupZ), "outWorkgroupZ offset incorrect");
 
-    buffer outArgs(info, sizeof(scalar_args));
+    vulkan_utils::buffer outArgs(info, sizeof(scalar_args));
 
     // The localsize kernel needs only a single workgroup with a single workitem
     const auto num_workgroups = std::make_tuple(1, 1);
 
-    kernel_module     module(info.device, info.desc_pool, "localsize");
-    kernel            kern(info.device, module, "ReadLocalSize", workgroup_sizes);
-    kernel_invocation invocation(info.device, info.cmd_pool, info.memory_properties);
+    clspv_utils::kernel_module     module(info.device, info.desc_pool, "localsize");
+    clspv_utils::kernel            kern(info.device, module, "ReadLocalSize", workgroup_sizes);
+    clspv_utils::kernel_invocation invocation(info.device, info.cmd_pool, info.memory_properties);
 
     invocation.addBufferArgument(outArgs.buf);
 
     invocation.run(info.graphics_queue, module, kern, num_workgroups);
 
-    memory_map argMap(outArgs);
+    vulkan_utils::memory_map argMap(outArgs);
     auto outScalars = static_cast<const scalar_args*>(argMap.data);
 
     const auto result = std::make_tuple(outScalars->outWorkgroupX,
@@ -2300,16 +2329,16 @@ bool check_results(const ExpectedPixelType* expected_pixels,
 }
 
 template <typename ExpectedPixelType, typename ObservedPixelType>
-bool check_results(const device_memory& expected,
-                   const device_memory& observed,
+bool check_results(const vulkan_utils::device_memory& expected,
+                   const vulkan_utils::device_memory& observed,
                    int                  width,
                    int                  height,
                    int                  pitch,
                    const char*          label,
                    bool                 logIncorrect = false,
                    bool                 logCorrect = false) {
-    memory_map src_map(expected);
-    memory_map dst_map(observed);
+    vulkan_utils::memory_map src_map(expected);
+    vulkan_utils::memory_map dst_map(observed);
     auto src_pixels = static_cast<const ExpectedPixelType*>(src_map.data);
     auto dst_pixels = static_cast<const ObservedPixelType*>(dst_map.data);
 
@@ -2317,7 +2346,7 @@ bool check_results(const device_memory& expected,
 }
 
 template <typename ObservedPixelType>
-bool check_results(const device_memory& observed,
+bool check_results(const vulkan_utils::device_memory& observed,
                    int                  width,
                    int                  height,
                    int                  pitch,
@@ -2325,7 +2354,7 @@ bool check_results(const device_memory& observed,
                    const char*          label,
                    bool                 logIncorrect = false,
                    bool                 logCorrect = false) {
-    memory_map map(observed);
+    vulkan_utils::memory_map map(observed);
     auto pixels = static_cast<const ObservedPixelType*>(map.data);
     return check_results(pixels, width, height, pitch, expected, label, logIncorrect, logCorrect);
 }
@@ -2337,7 +2366,7 @@ std::pair<int,int> test_localsize_kernel(const sample_info&             info,
                                          bool                           logIncorrect = false,
                                          bool                           logCorrect = false) {
     std::string label = "localsize.spv/ReadLocalSizes/";
-    const kernel_invocation::WorkgroupDimensions expected = std::make_pair(15, 23);
+    const clspv_utils::WorkgroupDimensions expected = std::make_pair(15, 23);
 
     const auto observed = run_localsize_kernel(info, samplers, expected);
 
@@ -2380,12 +2409,12 @@ std::pair<int,int> test_fill_kernel(const sample_info&            info,
 
     // allocate image buffer
     const std::size_t buffer_size = buffer_width * buffer_height * sizeof(PixelType);
-    buffer dst_buffer(info, buffer_size);
+    vulkan_utils::buffer dst_buffer(info, buffer_size);
 
     {
         const PixelType src_value = pixel_traits<PixelType>::translate((float4){ 0.0f, 0.0f, 0.0f, 0.0f });
 
-        memory_map dst_map(dst_buffer);
+        vulkan_utils::memory_map dst_map(dst_buffer);
         auto dst_data = static_cast<PixelType*>(dst_map.data);
         std::fill(dst_data, dst_data + (buffer_width * buffer_height), src_value);
     }
@@ -2432,20 +2461,20 @@ std::pair<int,int> test_copytoimage_kernel(const sample_info&            info,
     const std::size_t buffer_size = buffer_width * buffer_height * sizeof(BufferPixelType);
 
     // allocate buffers and images
-    buffer  src_buffer(info, buffer_size);
-    image   dstImage(info, buffer_width, buffer_height, pixel_traits<ImagePixelType>::vk_pixel_type);
+    vulkan_utils::buffer  src_buffer(info, buffer_size);
+    vulkan_utils::image   dstImage(info, buffer_width, buffer_height, pixel_traits<ImagePixelType>::vk_pixel_type);
 
     // initialize source and destination buffers
     {
         auto src_value = pixel_traits<BufferPixelType>::translate((float4){ 0.2f, 0.4f, 0.8f, 1.0f });
-        memory_map src_map(src_buffer);
+        vulkan_utils::memory_map src_map(src_buffer);
         auto src_data = static_cast<decltype(src_value)*>(src_map.data);
         std::fill(src_data, src_data + (buffer_width * buffer_height), src_value);
     }
 
     {
         auto dst_value = pixel_traits<ImagePixelType>::translate((float4){ 0.1f, 0.3f, 0.5f, 0.7f });
-        memory_map dst_map(dstImage);
+        vulkan_utils::memory_map dst_map(dstImage);
         auto dst_data = static_cast<decltype(dst_value)*>(dst_map.data);
         std::fill(dst_data, dst_data + (buffer_width * buffer_height), dst_value);
     }
@@ -2496,20 +2525,20 @@ std::pair<int,int> test_copyfromimage_kernel(const sample_info&            info,
     const std::size_t buffer_size = buffer_width * buffer_height * sizeof(BufferPixelType);
 
     // allocate buffers and images
-    buffer  dst_buffer(info, buffer_size);
-    image   srcImage(info, buffer_width, buffer_height, pixel_traits<ImagePixelType>::vk_pixel_type);
+    vulkan_utils::buffer  dst_buffer(info, buffer_size);
+    vulkan_utils::image   srcImage(info, buffer_width, buffer_height, pixel_traits<ImagePixelType>::vk_pixel_type);
 
     // initialize source and destination buffers
     {
         auto src_value = pixel_traits<ImagePixelType>::translate((float4){ 0.2f, 0.4f, 0.8f, 1.0f });
-        memory_map src_map(srcImage);
+        vulkan_utils::memory_map src_map(srcImage);
         auto src_data = static_cast<decltype(src_value)*>(src_map.data);
         std::fill(src_data, src_data + (buffer_width * buffer_height), src_value);
     }
 
     {
         auto dst_value = pixel_traits<BufferPixelType>::translate((float4){ 0.1f, 0.3f, 0.5f, 0.7f });
-        memory_map dst_map(dst_buffer);
+        vulkan_utils::memory_map dst_map(dst_buffer);
         auto dst_data = static_cast<decltype(dst_value)*>(dst_map.data);
         std::fill(dst_data, dst_data + (buffer_width * buffer_height), dst_value);
     }
@@ -2560,7 +2589,7 @@ std::pair<int,int> test_series(const test_t*                    first,
         try {
             results += (*first->func)(info, samplers, logIncorrect, logCorrect);
         }
-        catch(const vulkan_error& ve) {
+        catch(const vulkan_utils::error& ve) {
             // exceptions thrown during a test are counted as failures
             LOGE("%s: Exception %s: VkResult=%d", first->label.c_str(), ve.what(), ve.get_result());
             results += std::make_pair(0, 1);
