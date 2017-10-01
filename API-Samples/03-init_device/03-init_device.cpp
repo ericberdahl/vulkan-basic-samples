@@ -2199,6 +2199,80 @@ std::tuple<int,int,int> invoke_localsize_kernel(const clspv_utils::kernel_module
 
 namespace test_utils {
 
+    namespace {
+        template<typename ExpectedPixelType, typename ObservedPixelType>
+        struct pixel_promotion {
+            static constexpr const int expected_vec_size = pixel_traits<ExpectedPixelType>::num_components;
+            static constexpr const int observed_vec_size = pixel_traits<ObservedPixelType>::num_components;
+            static constexpr const int vec_size = (expected_vec_size > observed_vec_size
+                                                   ? observed_vec_size : expected_vec_size);
+
+            typedef typename pixel_traits<ExpectedPixelType>::component_t expected_comp_type;
+            typedef typename pixel_traits<ObservedPixelType>::component_t observed_comp_type;
+
+            static constexpr const bool expected_is_smaller =
+                    sizeof(expected_comp_type) < sizeof(observed_comp_type);
+            typedef typename std::conditional<expected_is_smaller, expected_comp_type, observed_comp_type>::type smaller_comp_type;
+            typedef typename std::conditional<!expected_is_smaller, expected_comp_type, observed_comp_type>::type larger_comp_type;
+
+            static constexpr const bool smaller_is_floating = std::is_floating_point<smaller_comp_type>::value;
+            typedef typename std::conditional<smaller_is_floating, smaller_comp_type, larger_comp_type>::type comp_type;
+
+            typedef typename pixel_vector<comp_type, vec_size>::type promotion_type;
+        };
+
+        template<typename T>
+        struct pixel_comparator {
+        };
+
+        template<>
+        struct pixel_comparator<float> {
+            static bool is_equal(float l, float r) {
+                const int ulp = 2;
+                return almost_equal(l, r, ulp);
+            }
+        };
+
+        template<>
+        struct pixel_comparator<half> {
+            static bool is_equal(half l, half r) {
+                const int ulp = 2;
+                return almost_equal(l, r, ulp);
+            }
+        };
+
+        template<>
+        struct pixel_comparator<uchar> {
+            static bool is_equal(uchar l, uchar r) {
+                return pixel_comparator<float>::is_equal(pixel_traits<float>::translate(l),
+                                                         pixel_traits<float>::translate(r));
+            }
+        };
+
+        template<typename T>
+        struct pixel_comparator<vec2<T> > {
+            static bool is_equal(const vec2<T> &l, const vec2<T> &r) {
+                return pixel_comparator<T>::is_equal(l.x, r.x)
+                       && pixel_comparator<T>::is_equal(l.y, r.y);
+            }
+        };
+
+        template<typename T>
+        struct pixel_comparator<vec4<T> > {
+            static bool is_equal(const vec4<T> &l, const vec4<T> &r) {
+                return pixel_comparator<T>::is_equal(l.x, r.x)
+                       && pixel_comparator<T>::is_equal(l.y, r.y)
+                       && pixel_comparator<T>::is_equal(l.z, r.z)
+                       && pixel_comparator<T>::is_equal(l.w, r.w);
+            }
+        };
+
+        template<typename T>
+        bool pixel_compare(const T &l, const T &r) {
+            return pixel_comparator<T>::is_equal(l, r);
+        }
+    }
+
     typedef std::pair<int,int>  Results;
 
     int count_successes(Results r) { return r.first; }
@@ -2230,78 +2304,6 @@ namespace test_utils {
         std::string                     name;
         std::vector<kernel_test_map>    kernelTests;
     };
-
-    template<typename ExpectedPixelType, typename ObservedPixelType>
-    struct pixel_promotion {
-        static constexpr const int expected_vec_size = pixel_traits<ExpectedPixelType>::num_components;
-        static constexpr const int observed_vec_size = pixel_traits<ObservedPixelType>::num_components;
-        static constexpr const int vec_size = (expected_vec_size > observed_vec_size
-                                               ? observed_vec_size : expected_vec_size);
-
-        typedef typename pixel_traits<ExpectedPixelType>::component_t expected_comp_type;
-        typedef typename pixel_traits<ObservedPixelType>::component_t observed_comp_type;
-
-        static constexpr const bool expected_is_smaller =
-                sizeof(expected_comp_type) < sizeof(observed_comp_type);
-        typedef typename std::conditional<expected_is_smaller, expected_comp_type, observed_comp_type>::type smaller_comp_type;
-        typedef typename std::conditional<!expected_is_smaller, expected_comp_type, observed_comp_type>::type larger_comp_type;
-
-        static constexpr const bool smaller_is_floating = std::is_floating_point<smaller_comp_type>::value;
-        typedef typename std::conditional<smaller_is_floating, smaller_comp_type, larger_comp_type>::type comp_type;
-
-        typedef typename pixel_vector<comp_type, vec_size>::type promotion_type;
-    };
-
-    template<typename T>
-    struct pixel_comparator {
-    };
-
-    template<>
-    struct pixel_comparator<float> {
-        static bool is_equal(float l, float r) {
-            const int ulp = 2;
-            return almost_equal(l, r, ulp);
-        }
-    };
-
-    template<>
-    struct pixel_comparator<half> {
-        static bool is_equal(half l, half r) {
-            const int ulp = 2;
-            return almost_equal(l, r, ulp);
-        }
-    };
-
-    template<>
-    struct pixel_comparator<uchar> {
-        static bool is_equal(uchar l, uchar r) {
-            return pixel_comparator<float>::is_equal(pixel_traits<float>::translate(l),
-                                                     pixel_traits<float>::translate(r));
-        }
-    };
-
-    template<typename T>
-    struct pixel_comparator<vec2<T> > {
-        static bool is_equal(const vec2<T> &l, const vec2<T> &r) {
-            return pixel_comparator<T>::is_equal(l.x, r.x)
-                   && pixel_comparator<T>::is_equal(l.y, r.y);
-        }
-    };
-
-    template<typename T>
-    struct pixel_comparator<vec4<T> > {
-        static bool is_equal(const vec4<T> &l, const vec4<T> &r) {
-            return pixel_comparator<T>::is_equal(l.x, r.x)
-                   && pixel_comparator<T>::is_equal(l.y, r.y)
-                   && pixel_comparator<T>::is_equal(l.z, r.z)
-                   && pixel_comparator<T>::is_equal(l.w, r.w);
-        }
-    };
-
-    template<typename T>
-    bool pixel_compare(const T &l, const T &r) {
-        return pixel_comparator<T>::is_equal(l, r);
-    }
 
     template<typename ExpectedPixelType, typename ObservedPixelType>
     bool check_result(ExpectedPixelType expected_pixel,
