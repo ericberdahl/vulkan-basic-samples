@@ -37,8 +37,6 @@ create and destroy a Vulkan physical device
 #include <string>
 #include <util_init.hpp>
 
-const bool test_output_verbose = false; // TODO need better way to communicate this
-
 /* ============================================================================================== */
 
 namespace vulkan_utils {
@@ -2210,12 +2208,17 @@ namespace test_utils {
     const Results   success = std::make_pair(1, 0);
     const Results   failure = std::make_pair(0, 1);
 
+    struct options {
+        bool    logVerbose;
+        bool    logIncorrect;
+        bool    logCorrect;
+    };
+
     typedef Results (*test_kernel_fn)(const clspv_utils::kernel_module& module,
                                       const clspv_utils::kernel&        kernel,
                                       const sample_info&                info,
                                       const std::vector<VkSampler>&     samplers,
-                                      bool                              logIncorrect,
-                                      bool                              logCorrect);
+                                      const options&                    opts);
 
     struct kernel_test_map {
         std::string                         entry;
@@ -2303,11 +2306,10 @@ namespace test_utils {
     template<typename ExpectedPixelType, typename ObservedPixelType>
     bool check_result(ExpectedPixelType expected_pixel,
                       ObservedPixelType observed_pixel,
-                      const char *label,
-                      int row,
-                      int column,
-                      bool logIncorrect = false,
-                      bool logCorrect = false) {
+                      const char*       label,
+                      int               row,
+                      int               column,
+                      const options&    opts) {
         typedef typename pixel_promotion<ExpectedPixelType, ObservedPixelType>::promotion_type promotion_type;
 
         auto expected = pixel_traits<promotion_type>::translate(expected_pixel);
@@ -2317,7 +2319,7 @@ namespace test_utils {
         auto t_observed = pixel_traits<float4>::translate(observed);
 
         const bool pixel_is_correct = pixel_compare(observed, expected);
-        if (test_output_verbose && ((pixel_is_correct && logCorrect) || (!pixel_is_correct && logIncorrect))) {
+        if (opts.logVerbose && ((pixel_is_correct && opts.logCorrect) || (!pixel_is_correct && opts.logIncorrect))) {
             const float4 log_expected = pixel_traits<float4>::translate(expected_pixel);
             const float4 log_observed = pixel_traits<float4>::translate(observed_pixel);
 
@@ -2332,14 +2334,13 @@ namespace test_utils {
     }
 
     template<typename ObservedPixelType, typename ExpectedPixelType>
-    bool check_results(const ObservedPixelType *observed_pixels,
-                       int width,
-                       int height,
-                       int pitch,
-                       ExpectedPixelType expected,
-                       const char *label,
-                       bool logIncorrect = false,
-                       bool logCorrect = false) {
+    bool check_results(const ObservedPixelType* observed_pixels,
+                       int                      width,
+                       int                      height,
+                       int                      pitch,
+                       ExpectedPixelType        expected,
+                       const char*              label,
+                       const options&           opts) {
         unsigned int num_correct_pixels = 0;
         unsigned int num_incorrect_pixels = 0;
 
@@ -2347,7 +2348,7 @@ namespace test_utils {
         for (int r = 0; r < height; ++r, row += pitch) {
             auto p = row;
             for (int c = 0; c < width; ++c, ++p) {
-                if (check_result(expected, *p, label, r, c, logIncorrect, logCorrect)) {
+                if (check_result(expected, *p, label, r, c, opts)) {
                     ++num_correct_pixels;
                 } else {
                     ++num_incorrect_pixels;
@@ -2355,7 +2356,7 @@ namespace test_utils {
             }
         }
 
-        if (test_output_verbose) {
+        if (opts.logVerbose) {
             LOGE("%s: Correct pixels=%d; Incorrect pixels=%d",
                  label, num_correct_pixels, num_incorrect_pixels);
         }
@@ -2364,14 +2365,13 @@ namespace test_utils {
     }
 
     template<typename ExpectedPixelType, typename ObservedPixelType>
-    bool check_results(const ExpectedPixelType *expected_pixels,
-                       const ObservedPixelType *observed_pixels,
-                       int width,
-                       int height,
-                       int pitch,
-                       const char *label,
-                       bool logIncorrect = false,
-                       bool logCorrect = false) {
+    bool check_results(const ExpectedPixelType* expected_pixels,
+                       const ObservedPixelType* observed_pixels,
+                       int                      width,
+                       int                      height,
+                       int                      pitch,
+                       const char*              label,
+                       const options&           opts) {
         unsigned int num_correct_pixels = 0;
         unsigned int num_incorrect_pixels = 0;
 
@@ -2381,7 +2381,7 @@ namespace test_utils {
             auto expected_p = expected_row;
             auto observed_p = observed_row;
             for (int c = 0; c < width; ++c, ++expected_p, ++observed_p) {
-                if (check_result(*expected_p, *observed_p, label, r, c, logIncorrect, logCorrect)) {
+                if (check_result(*expected_p, *observed_p, label, r, c, opts)) {
                     ++num_correct_pixels;
                 } else {
                     ++num_incorrect_pixels;
@@ -2389,7 +2389,7 @@ namespace test_utils {
             }
         }
 
-        if (test_output_verbose) {
+        if (opts.logVerbose) {
             LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels,
                  num_incorrect_pixels);
         }
@@ -2398,21 +2398,19 @@ namespace test_utils {
     }
 
     template<typename ExpectedPixelType, typename ObservedPixelType>
-    bool check_results(const vulkan_utils::device_memory &expected,
-                       const vulkan_utils::device_memory &observed,
-                       int width,
-                       int height,
-                       int pitch,
-                       const char *label,
-                       bool logIncorrect = false,
-                       bool logCorrect = false) {
+    bool check_results(const vulkan_utils::device_memory&   expected,
+                       const vulkan_utils::device_memory&   observed,
+                       int                                  width,
+                       int                                  height,
+                       int                                  pitch,
+                       const char*                          label,
+                       const options&                       opts) {
         vulkan_utils::memory_map src_map(expected);
         vulkan_utils::memory_map dst_map(observed);
         auto src_pixels = static_cast<const ExpectedPixelType *>(src_map.data);
         auto dst_pixels = static_cast<const ObservedPixelType *>(dst_map.data);
 
-        return check_results(src_pixels, dst_pixels, width, height, pitch, label, logIncorrect,
-                             logCorrect);
+        return check_results(src_pixels, dst_pixels, width, height, pitch, label, opts);
     }
 
     template<typename Fn>
@@ -2441,27 +2439,24 @@ namespace test_utils {
     }
 
     template<typename ObservedPixelType>
-    bool check_results(const vulkan_utils::device_memory &observed,
-                       int width,
-                       int height,
-                       int pitch,
-                       const float4 &expected,
-                       const char *label,
-                       bool logIncorrect = false,
-                       bool logCorrect = false) {
+    bool check_results(const vulkan_utils::device_memory&   observed,
+                       int                                  width,
+                       int                                  height,
+                       int                                  pitch,
+                       const float4&                        expected,
+                       const char*                          label,
+                       const options&                       opts) {
         vulkan_utils::memory_map map(observed);
         auto pixels = static_cast<const ObservedPixelType *>(map.data);
-        return check_results(pixels, width, height, pitch, expected, label, logIncorrect,
-                             logCorrect);
+        return check_results(pixels, width, height, pitch, expected, label, opts);
     }
 
     Results test_kernel_invocation(const clspv_utils::kernel_module&    module,
-                        const clspv_utils::kernel&                      kernel,
-                        test_utils::test_kernel_fn                      testFn,
-                        const sample_info&                              info,
-                        const std::vector<VkSampler>&                   samplers,
-                        bool                                            logIncorrect = false,
-                        bool                                            logCorrect = false) {
+                                   const clspv_utils::kernel&           kernel,
+                                   test_utils::test_kernel_fn           testFn,
+                                   const sample_info&                   info,
+                                   const std::vector<VkSampler>&        samplers,
+                                   const options&                       opts) {
         Results result = no_result;
 
         if (testFn) {
@@ -2469,10 +2464,11 @@ namespace test_utils {
             result = runInExceptionContext(label,
                                   "invoking kernel",
                                   [&]() {
-                                      return testFn(module, kernel, info, samplers, logIncorrect, logCorrect);
+                                      return testFn(module, kernel, info, samplers, opts);
                                   });
 
-            if ((count_successes(result) > 0 && logCorrect) || (count_failures(result) > 0 && logIncorrect)) {
+            if ((count_successes(result) > 0 && opts.logCorrect) ||
+                    (count_failures(result) > 0 && opts.logIncorrect)) {
                 LOGE("%s: Successes=%d Failures=%d",
                      label.c_str(),
                      count_successes(result), count_failures(result));
@@ -2488,13 +2484,11 @@ namespace test_utils {
                                    const test_utils::test_kernel_fn*    last,
                                    const sample_info&                   info,
                                    const std::vector<VkSampler>&        samplers,
-                                   bool                                 logIncorrect = false,
-                                   bool                                 logCorrect = false) {
+                                   const options&                       opts) {
         Results result = no_result;
 
         for (; first != last; ++first) {
-            result += test_kernel_invocation(module, kernel, *first, info, samplers,
-                                             logIncorrect, logCorrect);
+            result += test_kernel_invocation(module, kernel, *first, info, samplers, opts);
         }
 
         return result;
@@ -2506,8 +2500,7 @@ namespace test_utils {
                         const clspv_utils::WorkgroupDimensions& numWorkgroups,
                         const sample_info&                      info,
                         const std::vector<VkSampler>&           samplers,
-                        bool                                    logIncorrect = false,
-                        bool                                    logCorrect = false) {
+                        const options&                          opts) {
         return runInExceptionContext(module.getName() + "/" + entryPoint,
                                      "compiling kernel",
                                      [&]() {
@@ -2521,8 +2514,7 @@ namespace test_utils {
                                                                            testFn,
                                                                            info,
                                                                            samplers,
-                                                                           logIncorrect,
-                                                                           logCorrect);
+                                                                           opts);
 
                                          return results;
                                      });
@@ -2532,8 +2524,7 @@ namespace test_utils {
                         const std::vector<kernel_test_map>& kernelTests,
                         const sample_info&                  info,
                         const std::vector<VkSampler>&       samplers,
-                        bool                                logIncorrect = false,
-                        bool                                logCorrect = false) {
+                        const options&                      opts) {
         return runInExceptionContext(moduleName, "loading module", [&]() {
             Results result = no_result;
 
@@ -2553,8 +2544,7 @@ namespace test_utils {
                                       epTest == kernelTests.end() ? clspv_utils::WorkgroupDimensions() : epTest->workgroupSize,
                                       info,
                                       samplers,
-                                      logIncorrect,
-                                      logCorrect);
+                                      opts);
             }
 
             return result;
@@ -2568,8 +2558,7 @@ test_utils::Results test_readlocalsize(const clspv_utils::kernel_module& module,
                                        const clspv_utils::kernel&        kernel,
                                        const sample_info&                info,
                                        const std::vector<VkSampler>&     samplers,
-                                       bool                              logIncorrect = false,
-                                       bool                              logCorrect = false) {
+                                       const test_utils::options&        opts) {
     const clspv_utils::WorkgroupDimensions expected = kernel.getWorkgroupSize();
 
     const auto observed = invoke_localsize_kernel(module, kernel, info, samplers);
@@ -2578,7 +2567,7 @@ test_utils::Results test_readlocalsize(const clspv_utils::kernel_module& module,
                           expected.y == std::get<1>(observed) &&
                           1 == std::get<2>(observed));
 
-    if (test_output_verbose && ((success && logCorrect) || (!success && logIncorrect))) {
+    if (opts.logVerbose && ((success && opts.logCorrect) || (!success && opts.logIncorrect))) {
         const std::string label = module.getName() + "/" + kernel.getEntryPoint();
         LOGE("%s: %s workgroup_size expected{x=%d, y=%d, z=1} observed{x=%d, y=%d, z=%d}",
              success ? "CORRECT" : "INCORRECT",
@@ -2591,12 +2580,11 @@ test_utils::Results test_readlocalsize(const clspv_utils::kernel_module& module,
 };
 
 template <typename PixelType>
-test_utils::Results test_fill(const clspv_utils::kernel_module&  module,
-                              const clspv_utils::kernel&         kernel,
-                              const sample_info&            info,
-                              const std::vector<VkSampler>& samplers,
-                              bool                          logIncorrect = false,
-                              bool                          logCorrect = false) {
+test_utils::Results test_fill(const clspv_utils::kernel_module&     module,
+                              const clspv_utils::kernel&            kernel,
+                              const sample_info&                    info,
+                              const std::vector<VkSampler>&         samplers,
+                              const test_utils::options&            opts) {
     const std::string typeLabel = pixel_traits<PixelType>::type_name;
 
     std::string testLabel = "fills.spv/FillWithColorKernel/";
@@ -2634,8 +2622,7 @@ test_utils::Results test_fill(const clspv_utils::kernel_module&  module,
                                                   buffer_width,
                                                   color,
                                                   testLabel.c_str(),
-                                                  logIncorrect,
-                                                  logCorrect);
+                                                  opts);
 
     dst_buffer.reset();
 
@@ -2646,8 +2633,7 @@ test_utils::Results test_fill_series(const clspv_utils::kernel_module&  module,
                                      const clspv_utils::kernel&         kernel,
                                      const sample_info&                 info,
                                      const std::vector<VkSampler>&      samplers,
-                                     bool                               logIncorrect = false,
-                                     bool                               logCorrect = false) {
+                                     const test_utils::options&         opts) {
     const test_utils::test_kernel_fn tests[] = {
             test_fill<float4>,
             test_fill<half4>,
@@ -2658,7 +2644,7 @@ test_utils::Results test_fill_series(const clspv_utils::kernel_module&  module,
                                               std::begin(tests), std::end(tests),
                                               info,
                                               samplers,
-                                              logIncorrect, logCorrect);
+                                              opts);
 }
 
 /* ============================================================================================== */
@@ -2668,8 +2654,7 @@ test_utils::Results test_copytoimage(const clspv_utils::kernel_module&  module,
                                      const clspv_utils::kernel&         kernel,
                                      const sample_info&                 info,
                                      const std::vector<VkSampler>&      samplers,
-                                     bool                               logIncorrect = false,
-                                     bool                               logCorrect = false) {
+                                     const test_utils::options&         opts) {
     std::string typeLabel = pixel_traits<BufferPixelType>::type_name;
     typeLabel += '-';
     typeLabel += pixel_traits<ImagePixelType>::type_name;
@@ -2719,8 +2704,7 @@ test_utils::Results test_copytoimage(const clspv_utils::kernel_module&  module,
                                                                         buffer_width, buffer_height,
                                                                         buffer_height,
                                                                         testLabel.c_str(),
-                                                                        logIncorrect,
-                                                                        logCorrect);
+                                                                        opts);
 
     dstImage.reset();
     src_buffer.reset();
@@ -2733,8 +2717,7 @@ test_utils::Results test_copytoimage_series(const clspv_utils::kernel_module&   
                                             const clspv_utils::kernel&          kernel,
                                             const sample_info&                  info,
                                             const std::vector<VkSampler>&       samplers,
-                                            bool                                logIncorrect = false,
-                                            bool                                logCorrect = false) {
+                                            const test_utils::options&          opts) {
     const test_utils::test_kernel_fn tests[] = {
             test_copytoimage<uchar, ImagePixelType>,
             test_copytoimage<uchar4, ImagePixelType>,
@@ -2749,16 +2732,14 @@ test_utils::Results test_copytoimage_series(const clspv_utils::kernel_module&   
                                               std::begin(tests), std::end(tests),
                                               info,
                                               samplers,
-                                              logIncorrect,
-                                              logCorrect);
+                                              opts);
 }
 
 test_utils::Results test_copytoimage_matrix(const clspv_utils::kernel_module&   module,
                                             const clspv_utils::kernel&          kernel,
                                             const sample_info&                  info,
                                             const std::vector<VkSampler>&       samplers,
-                                            bool                                logIncorrect = false,
-                                            bool                                logCorrect = false) {
+                                            const test_utils::options&          opts) {
     const test_utils::test_kernel_fn tests[] = {
             test_copytoimage_series<float4>,
             test_copytoimage_series<half4>,
@@ -2775,8 +2756,7 @@ test_utils::Results test_copytoimage_matrix(const clspv_utils::kernel_module&   
                                               std::begin(tests), std::end(tests),
                                               info,
                                               samplers,
-                                              logIncorrect,
-                                              logCorrect);
+                                              opts);
 }
 
 /* ============================================================================================== */
@@ -2786,8 +2766,7 @@ test_utils::Results test_copyfromimage(const clspv_utils::kernel_module&    modu
                                        const clspv_utils::kernel&           kernel,
                                        const sample_info&                   info,
                                        const std::vector<VkSampler>&        samplers,
-                                       bool                                 logIncorrect = false,
-                                       bool                                 logCorrect = false) {
+                                       const test_utils::options&           opts) {
     std::string typeLabel = pixel_traits<BufferPixelType>::type_name;
     typeLabel += '-';
     typeLabel += pixel_traits<ImagePixelType>::type_name;
@@ -2836,8 +2815,7 @@ test_utils::Results test_copyfromimage(const clspv_utils::kernel_module&    modu
                                                                         buffer_width, buffer_height,
                                                                         buffer_height,
                                                                         testLabel.c_str(),
-                                                                        logIncorrect,
-                                                                        logCorrect);
+                                                                        opts);
 
     srcImage.reset();
     dst_buffer.reset();
@@ -2850,8 +2828,7 @@ test_utils::Results test_copyfromimage_series(const clspv_utils::kernel_module& 
                                               const clspv_utils::kernel&            kernel,
                                               const sample_info&                    info,
                                               const std::vector<VkSampler>&         samplers,
-                                              bool                                  logIncorrect = false,
-                                              bool                                  logCorrect = false) {
+                                              const test_utils::options&            opts) {
     const test_utils::test_kernel_fn tests[] = {
             test_copyfromimage<uchar, ImagePixelType>,
             test_copyfromimage<uchar4, ImagePixelType>,
@@ -2866,16 +2843,14 @@ test_utils::Results test_copyfromimage_series(const clspv_utils::kernel_module& 
                                               std::begin(tests), std::end(tests),
                                               info,
                                               samplers,
-                                              logIncorrect,
-                                              logCorrect);
+                                              opts);
 }
 
 test_utils::Results test_copyfromimage_matrix(const clspv_utils::kernel_module&     module,
                                               const clspv_utils::kernel&            kernel,
                                               const sample_info&                    info,
                                               const std::vector<VkSampler>&         samplers,
-                                              bool                                  logIncorrect = false,
-                                              bool                                  logCorrect = false) {
+                                              const test_utils::options&            opts) {
     const test_utils::test_kernel_fn tests[] = {
             test_copyfromimage_series<float4>,
             test_copyfromimage_series<half4>,
@@ -2892,8 +2867,7 @@ test_utils::Results test_copyfromimage_matrix(const clspv_utils::kernel_module& 
                                               std::begin(tests), std::end(tests),
                                               info,
                                               samplers,
-                                              logIncorrect,
-                                              logCorrect);
+                                              opts);
 }
 
 
@@ -2919,10 +2893,16 @@ const test_utils::module_test_bundle module_tests[] = {
 };
 
 test_utils::Results run_all_tests(const sample_info& info, const std::vector<VkSampler>& samplers) {
+    const test_utils::options opts = {
+            false,  // logVerbose
+            true,   // logIncorrect
+            false   // logCorrect
+    };
+
     auto test_results = test_utils::no_result;
 
     for (auto m : module_tests) {
-        test_results += test_utils::test_module(m.name, m.kernelTests, info, samplers, true, false);
+        test_results += test_utils::test_module(m.name, m.kernelTests, info, samplers, opts);
     }
 
     return test_results;
