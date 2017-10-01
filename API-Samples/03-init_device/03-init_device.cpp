@@ -2756,27 +2756,17 @@ struct test_t {
 };
 
 test_utils::Results test_series(const test_t*                    first,
-                               const test_t*                    last,
-                               const sample_info&               info,
-                               const std::vector<VkSampler>&    samplers,
-                               bool                             logIncorrect = false,
-                               bool                             logCorrect = false) {
+                                const test_t*                    last,
+                                const sample_info&               info,
+                                const std::vector<VkSampler>&    samplers,
+                                bool                             logIncorrect = false,
+                                bool                             logCorrect = false) {
     auto results = std::make_pair(0, 0);
 
     for (; first != last; ++first) {
-        try {
-            results += (*first->func)(info, samplers, logIncorrect, logCorrect);
-        }
-        catch(const vulkan_utils::error& ve) {
-            // exceptions thrown during a test are counted as failures
-            LOGE("%s: Exception %s: VkResult=%d", first->label.c_str(), ve.what(), ve.get_result());
-            results += test_utils::failure;
-        }
-        catch(const std::exception& e) {
-            // exceptions thrown during a test are counted as failures
-            LOGE("%s: Exception %s", first->label.c_str(), e.what());
-            results += test_utils::failure;
-        }
+        results += test_utils::runInExceptionContext(first->label.c_str(), "", [&]() {
+            return (*first->func)(info, samplers, logIncorrect, logCorrect);
+        });
     }
 
     return results;
