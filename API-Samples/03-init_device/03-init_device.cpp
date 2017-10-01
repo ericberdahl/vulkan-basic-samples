@@ -364,7 +364,12 @@ namespace clspv_utils {
         };
     } // namespace details
 
-    typedef std::tuple<int,int> WorkgroupDimensions;
+    struct WorkgroupDimensions {
+        WorkgroupDimensions(int xDim = 1, int yDim = 1) : x(xDim), y(yDim) {}
+
+        int x;
+        int y;
+    };
 
     class kernel_module {
     public:
@@ -412,6 +417,9 @@ namespace clspv_utils {
 
         void bindPipeline(VkCommandBuffer command) const;
 
+        std::string getEntryPoint() const { return mEntryPoint; }
+        WorkgroupDimensions getWorkgroupSize() const { return mWorkgroupSizes; }
+
         VkDescriptorSet getLiteralSamplerDescSet() const { return mLiteralSamplerDescSet; }
         VkDescriptorSet getArgumentDescSet() const { return mArgumentDescSet; }
 
@@ -420,10 +428,12 @@ namespace clspv_utils {
         VkPipeline              createPipeline(const std::tuple<int,int>& work_group_sizes);
 
     private:
-        VkDevice        mDevice;
-        VkPipeline      mPipeline;
-        VkDescriptorSet mLiteralSamplerDescSet;
-        VkDescriptorSet mArgumentDescSet;
+        std::string         mEntryPoint;
+        WorkgroupDimensions mWorkgroupSizes;
+        VkDevice            mDevice;
+        VkPipeline          mPipeline;
+        VkDescriptorSet     mLiteralSamplerDescSet;
+        VkDescriptorSet     mArgumentDescSet;
     };
 
     class kernel_invocation {
@@ -903,8 +913,8 @@ namespace clspv_utils {
     VkPipeline kernel_module::createPipeline(const std::string& entryPoint, const WorkgroupDimensions& work_group_sizes) const {
         const unsigned int num_workgroup_sizes = 3;
         const int32_t workGroupSizes[num_workgroup_sizes] = {
-                std::get<0>(work_group_sizes),
-                std::get<1>(work_group_sizes),
+                work_group_sizes.x,
+                work_group_sizes.y,
                 1
         };
         const VkSpecializationMapEntry specializationEntries[num_workgroup_sizes] = {
@@ -964,6 +974,8 @@ namespace clspv_utils {
                    const kernel_module&         module,
                    std::string                  entryPoint,
                    const WorkgroupDimensions&   workgroup_sizes) :
+            mEntryPoint(entryPoint),
+            mWorkgroupSizes(workgroup_sizes),
             mDevice(device),
             mPipeline(VK_NULL_HANDLE),
             mLiteralSamplerDescSet(VK_NULL_HANDLE),
@@ -1187,7 +1199,7 @@ namespace clspv_utils {
         inKernel.bindPipeline(mCommand);
         module.bindDescriptors(mCommand);
 
-        vkCmdDispatch(mCommand, std::get<0>(num_workgroups), std::get<1>(num_workgroups), 1);
+        vkCmdDispatch(mCommand, num_workgroups.x, num_workgroups.y, 1);
 
         vulkan_utils::throwIfNotSuccess(vkEndCommandBuffer(mCommand),
                                         "vkEndCommandBuffer");
@@ -2018,9 +2030,10 @@ void run_fill_kernel(const sample_info&             info,
             color
     };
 
-    const auto workgroup_sizes = std::make_tuple(32, 32);
-    const auto num_workgroups = std::make_tuple((scalars.inWidth + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
-                                                (scalars.inHeight + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
+    const clspv_utils::WorkgroupDimensions workgroup_sizes(32, 32);
+    const clspv_utils::WorkgroupDimensions num_workgroups(
+            (scalars.inWidth + workgroup_sizes.x - 1) / workgroup_sizes.x,
+            (scalars.inHeight + workgroup_sizes.y - 1) / workgroup_sizes.y);
 
     clspv_utils::kernel_module     module(info.device, info.desc_pool, "Fills");
     clspv_utils::kernel            kern(info.device, module, "FillWithColorKernel", workgroup_sizes);
@@ -2074,9 +2087,10 @@ void run_copybuffertoimage_kernel(const sample_info& info,
             height
     };
 
-    const auto workgroup_sizes = std::make_tuple(32, 32);
-    const auto num_workgroups = std::make_tuple((width + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
-                                                (height + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
+    const clspv_utils::WorkgroupDimensions workgroup_sizes(32, 32);
+    const clspv_utils::WorkgroupDimensions num_workgroups(
+            (width + workgroup_sizes.x - 1) / workgroup_sizes.x,
+            (height + workgroup_sizes.y - 1) / workgroup_sizes.y);
 
     clspv_utils::kernel_module     module(info.device, info.desc_pool, "Memory");
     clspv_utils::kernel            kern(info.device, module, "CopyBufferToImageKernel", workgroup_sizes);
@@ -2128,9 +2142,10 @@ void run_copyimagetobuffer_kernel(const sample_info& info,
             height
     };
 
-    const auto workgroup_sizes = std::make_tuple(32, 32);
-    const auto num_workgroups = std::make_tuple((width + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
-                                                (height + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
+    const clspv_utils::WorkgroupDimensions workgroup_sizes(32, 32);
+    const clspv_utils::WorkgroupDimensions num_workgroups(
+            (width + workgroup_sizes.x - 1) / workgroup_sizes.x,
+            (height + workgroup_sizes.y - 1) / workgroup_sizes.y);
 
     clspv_utils::kernel_module     module(info.device, info.desc_pool, "Memory");
     clspv_utils::kernel            kern(info.device, module, "CopyImageToBufferKernel", workgroup_sizes);
@@ -2144,9 +2159,10 @@ void run_copyimagetobuffer_kernel(const sample_info& info,
     invocation.run(info.graphics_queue, module, kern, num_workgroups);
 }
 
-std::tuple<int,int,int> run_localsize_kernel(const sample_info&             info,
-                                             const std::vector<VkSampler>&  samplers,
-                                             const clspv_utils::WorkgroupDimensions& workgroup_sizes) {
+std::tuple<int,int,int> invoke_localsize_kernel(const clspv_utils::kernel_module&   module,
+                                                const clspv_utils::kernel&          kernel,
+                                                const sample_info&                  info,
+                                                const std::vector<VkSampler>&       samplers) {
     struct scalar_args {
         int outWorkgroupX;  // offset 0
         int outWorkgroupY;  // offset 4
@@ -2159,15 +2175,13 @@ std::tuple<int,int,int> run_localsize_kernel(const sample_info&             info
     vulkan_utils::buffer outArgs(info, sizeof(scalar_args));
 
     // The localsize kernel needs only a single workgroup with a single workitem
-    const auto num_workgroups = std::make_tuple(1, 1);
+    const clspv_utils::WorkgroupDimensions num_workgroups(1, 1);
 
-    clspv_utils::kernel_module     module(info.device, info.desc_pool, "localsize");
-    clspv_utils::kernel            kern(info.device, module, "ReadLocalSize", workgroup_sizes);
     clspv_utils::kernel_invocation invocation(info.device, info.cmd_pool, info.memory_properties);
 
     invocation.addBufferArgument(outArgs.buf);
 
-    invocation.run(info.graphics_queue, module, kern, num_workgroups);
+    invocation.run(info.graphics_queue, module, kernel, num_workgroups);
 
     vulkan_utils::memory_map argMap(outArgs);
     auto outScalars = static_cast<const scalar_args*>(argMap.data);
@@ -2177,6 +2191,7 @@ std::tuple<int,int,int> run_localsize_kernel(const sample_info&             info
                                         outScalars->outWorkgroupZ);
     return result;
 }
+
 
 /* ============================================================================================== */
 
@@ -2190,6 +2205,24 @@ namespace test_utils {
     const Results   no_result = std::make_pair(0, 0);
     const Results   success = std::make_pair(1, 0);
     const Results   failure = std::make_pair(0, 1);
+
+    typedef Results (*test_kernel_fn)(const clspv_utils::kernel_module& module,
+                                      const clspv_utils::kernel&        kernel,
+                                      const sample_info&                info,
+                                      const std::vector<VkSampler>&     samplers,
+                                      bool                              logIncorrect,
+                                      bool                              logCorrect);
+
+    struct kernel_test_map {
+        std::string                         entry;
+        test_kernel_fn                      test;
+        clspv_utils::WorkgroupDimensions    workgroupSize;
+    };
+
+    struct module_test_bundle {
+        std::string                     name;
+        std::vector<kernel_test_map>    kernelTests;
+    };
 
     template<typename ExpectedPixelType, typename ObservedPixelType>
     struct pixel_promotion {
@@ -2419,35 +2452,60 @@ namespace test_utils {
                              logCorrect);
     }
 
-    Results test_kernel(const clspv_utils::kernel_module&   module,
-                        const std::string&                  entryPoint,
-                        const sample_info&                  info,
-                        const std::vector<VkSampler>&       samplers,
-                        bool                                logIncorrect = false,
-                        bool                                logCorrect = false) {
+    Results test_kernel_invocation(const clspv_utils::kernel_module&    module,
+                        const clspv_utils::kernel&                      kernel,
+                        test_utils::test_kernel_fn                      testFn,
+                        const sample_info&                              info,
+                        const std::vector<VkSampler>&                   samplers,
+                        bool                                            logIncorrect = false,
+                        bool                                            logCorrect = false) {
+        Results result = no_result;
+
+        if (testFn) {
+            result += runInExceptionContext(module.getName() + "/" + kernel.getEntryPoint(),
+                                  "invoking kernel",
+                                  [&]() {
+                                      return testFn(module, kernel, info, samplers, logIncorrect, logCorrect);
+                                  });
+        }
+
+        return result;
+    }
+
+    Results test_kernel(const clspv_utils::kernel_module&       module,
+                        const std::string&                      entryPoint,
+                        test_utils::test_kernel_fn              testFn,
+                        const clspv_utils::WorkgroupDimensions& numWorkgroups,
+                        const sample_info&                      info,
+                        const std::vector<VkSampler>&           samplers,
+                        bool                                    logIncorrect = false,
+                        bool                                    logCorrect = false) {
         return runInExceptionContext(module.getName() + "/" + entryPoint,
                                      "compiling kernel",
-                                     [&info, &module, &entryPoint]() {
+                                     [&]() {
                                          Results results = no_result;
 
-                                         // TODO lookup workgroup count per module/kernel tuple
-                                         const auto num_workgroups = clspv_utils::WorkgroupDimensions(
-                                                 1, 1);
-
                                          clspv_utils::kernel kernel(info.device, module,
-                                                                    entryPoint, num_workgroups);
+                                                                    entryPoint, numWorkgroups);
                                          results += success;
-                                         // TODO lookup test entry for the kernel
+                                         results += test_kernel_invocation(module,
+                                                                           kernel,
+                                                                           testFn,
+                                                                           info,
+                                                                           samplers,
+                                                                           logIncorrect,
+                                                                           logCorrect);
 
                                          return results;
                                      });
     }
 
-    Results test_module(const std::string&              moduleName,
-                        const sample_info&              info,
-                        const std::vector<VkSampler>&   samplers,
-                        bool                            logIncorrect = false,
-                        bool                            logCorrect = false) {
+    Results test_module(const std::string&                  moduleName,
+                        const std::vector<kernel_test_map>& kernelTests,
+                        const sample_info&                  info,
+                        const std::vector<VkSampler>&       samplers,
+                        bool                                logIncorrect = false,
+                        bool                                logCorrect = false) {
         return runInExceptionContext(moduleName, "loading module", [&]() {
             Results result = no_result;
 
@@ -2456,7 +2514,19 @@ namespace test_utils {
 
             std::vector<std::string> entryPoints(module.getEntryPoints());
             for (auto ep : entryPoints) {
-                result += test_kernel(module, ep, info, samplers, logIncorrect, logCorrect);
+                const auto epTest = std::find_if(kernelTests.begin(), kernelTests.end(),
+                                                 [&ep](const kernel_test_map& ktm) {
+                                                     return ktm.entry == ep;
+                                                 });
+
+                result += test_kernel(module,
+                                      ep,
+                                      epTest == kernelTests.end() ? nullptr : epTest->test,
+                                      epTest == kernelTests.end() ? clspv_utils::WorkgroupDimensions() : epTest->workgroupSize,
+                                      info,
+                                      samplers,
+                                      logIncorrect,
+                                      logCorrect);
             }
 
             return result;
@@ -2466,99 +2536,38 @@ namespace test_utils {
 
 /* ============================================================================================== */
 
-test_utils::Results test_localsize_kernel(const sample_info&             info,
-                                         const std::vector<VkSampler>&  samplers,
-                                         bool                           logIncorrect = false,
-                                         bool                           logCorrect = false) {
-    std::string label = "localsize.spv/ReadLocalSizes/";
-    const clspv_utils::WorkgroupDimensions expected = std::make_pair(15, 23);
+test_utils::Results test_readlocalsize(const clspv_utils::kernel_module& module,
+                                       const clspv_utils::kernel&        kernel,
+                                       const sample_info&                info,
+                                       const std::vector<VkSampler>&     samplers,
+                                       bool                              logIncorrect = false,
+                                       bool                              logCorrect = false) {
+    const clspv_utils::WorkgroupDimensions expected = kernel.getWorkgroupSize();
 
-    const auto observed = run_localsize_kernel(info, samplers, expected);
+    const auto observed = invoke_localsize_kernel(module, kernel, info, samplers);
 
-    const bool success = (std::get<0>(expected) == std::get<0>(observed) &&
-                          std::get<1>(expected) == std::get<1>(observed) &&
+    const bool success = (expected.x == std::get<0>(observed) &&
+                          expected.y == std::get<1>(observed) &&
                           1 == std::get<2>(observed));
     if (success) {
         if (logCorrect) {
+            const std::string label = module.getName() + "/" + kernel.getEntryPoint();
             LOGE("%s:  CORRECT workgroup_size{x:%d, y:%d, z:%d}", label.c_str(),
                  std::get<0>(observed), std::get<1>(observed), std::get<2>(observed));
         }
     }
     else {
         if (logIncorrect) {
+            const std::string label = module.getName() + "/" + kernel.getEntryPoint();
             LOGE("%s: INCORRECT workgroup_size expected{x=%d, y=%d, z=1} observed{x=%d, y=%d, z=%d}",
                  label.c_str(),
-                 std::get<0>(expected), std::get<1>(expected),
+                 expected.x, expected.y,
                  std::get<0>(observed), std::get<1>(observed), std::get<2>(observed));
         }
     }
 
-    LOGE("%s: %s", label.c_str(), (success ? "Correct" : "Incorrect"));
-
-    return (success ? test_utils::success : std::make_pair(0, 1));
+    return (success ? std::make_pair(1, 0) : std::make_pair(0, 1));
 };
-
-namespace localsize_tests {
-    test_utils::Results test_readlocalsize(const clspv_utils::kernel_module& module,
-                                           const clspv_utils::kernel&        kernel,
-                                           const sample_info&                info,
-                                           const std::vector<VkSampler>&     samplers,
-                                           bool                              logIncorrect = false,
-                                           bool                              logCorrect = false) {
-        std::string label = "localsize.spv/ReadLocalSizes/";
-        const clspv_utils::WorkgroupDimensions expected = std::make_pair(15, 23);
-
-        struct scalar_args {
-            int outWorkgroupX;  // offset 0
-            int outWorkgroupY;  // offset 4
-            int outWorkgroupZ;  // offset 8
-        };
-        static_assert(0 == offsetof(scalar_args, outWorkgroupX), "outWorkgroupX offset incorrect");
-        static_assert(4 == offsetof(scalar_args, outWorkgroupY), "outWorkgroupY offset incorrect");
-        static_assert(8 == offsetof(scalar_args, outWorkgroupZ), "outWorkgroupZ offset incorrect");
-
-        vulkan_utils::buffer outArgs(info, sizeof(scalar_args));
-
-        // The localsize kernel needs only a single workgroup with a single workitem
-        const auto num_workgroups = std::make_tuple(1, 1);
-
-        clspv_utils::kernel_invocation invocation(info.device, info.cmd_pool, info.memory_properties);
-
-        invocation.addBufferArgument(outArgs.buf);
-
-        invocation.run(info.graphics_queue, module, kernel, num_workgroups);
-
-        vulkan_utils::memory_map argMap(outArgs);
-        auto outScalars = static_cast<const scalar_args*>(argMap.data);
-
-        const auto observed = std::make_tuple(outScalars->outWorkgroupX,
-                                            outScalars->outWorkgroupY,
-                                            outScalars->outWorkgroupZ);
-
-        const bool success = (std::get<0>(expected) == std::get<0>(observed) &&
-                              std::get<1>(expected) == std::get<1>(observed) &&
-                              1 == std::get<2>(observed));
-        if (success) {
-            if (logCorrect) {
-                LOGE("%s:  CORRECT workgroup_size{x:%d, y:%d, z:%d}", label.c_str(),
-                     std::get<0>(observed), std::get<1>(observed), std::get<2>(observed));
-            }
-        }
-        else {
-            if (logIncorrect) {
-                LOGE("%s: INCORRECT workgroup_size expected{x=%d, y=%d, z=1} observed{x=%d, y=%d, z=%d}",
-                     label.c_str(),
-                     std::get<0>(expected), std::get<1>(expected),
-                     std::get<0>(observed), std::get<1>(observed), std::get<2>(observed));
-            }
-        }
-
-        LOGE("%s: %s", label.c_str(), (success ? "Correct" : "Incorrect"));
-
-        return (success ? std::make_pair(1, 0) : std::make_pair(0, 1));
-    };
-} // namespace localsize_tests
-
 
 template <typename PixelType>
 test_utils::Results test_fill_kernel(const sample_info&            info,
@@ -2813,6 +2822,31 @@ test_utils::Results test_copyfromimage_series(const sample_info&            info
     return test_series(std::begin(tests), std::end(tests), info, samplers, logIncorrect, logCorrect);
 }
 
+/* ============================================================================================== */
+
+const test_utils::module_test_bundle module_tests[] = {
+        {
+                "localsize", {
+                                     { "ReadLocalSize", test_readlocalsize }
+                             }
+        },
+        {
+                "Fills", {}
+        },
+        {
+                "Memory", {}
+        },
+};
+
+test_utils::Results run_all_tests(const sample_info& info, const std::vector<VkSampler>& samplers) {
+    auto test_results = test_utils::no_result;
+
+    for (auto m : module_tests) {
+        test_results += test_utils::test_module(m.name, m.kernelTests, info, samplers, false, false);
+    }
+
+    return test_results;
+}
 
 /* ============================================================================================== */
 
@@ -2851,12 +2885,10 @@ int sample_main(int argc, char *argv[]) {
                    std::back_inserter(samplers),
                    std::bind(create_compatible_sampler, info.device, std::placeholders::_1));
 
-    auto loadResults = test_utils::test_module("localsize", info, samplers, false, false);
-    loadResults += test_utils::test_module("Fills", info, samplers, false, false);
-    loadResults += test_utils::test_module("Memory", info, samplers, false, false);
+
+    auto test_results = run_all_tests(info, samplers);
 
     const test_t tests[] = {
-            { test_localsize_kernel, "test_localsize_kernel" },
             { test_fill_kernel<float4>, "test_fill_kernel<float4>" },
             { test_fill_kernel<half4>, "test_fill_kernel<half4>" },
 
@@ -2882,7 +2914,7 @@ int sample_main(int argc, char *argv[]) {
             { test_copyfromimage_series<uchar>, "test_copyfromimage_series<uchar>" },
     };
 
-    const auto test_results = test_series(std::begin(tests), std::end(tests), info, samplers);
+    test_results += test_series(std::begin(tests), std::end(tests), info, samplers);
 
     //
     // Clean up
