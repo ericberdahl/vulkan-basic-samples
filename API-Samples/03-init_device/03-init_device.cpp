@@ -37,6 +37,8 @@ create and destroy a Vulkan physical device
 #include <string>
 #include <util_init.hpp>
 
+const bool test_output_verbose = false; // TODO need better way to communicate this
+
 /* ============================================================================================== */
 
 namespace vulkan_utils {
@@ -2315,20 +2317,15 @@ namespace test_utils {
         auto t_observed = pixel_traits<float4>::translate(observed);
 
         const bool pixel_is_correct = pixel_compare(observed, expected);
-        if (pixel_is_correct) {
-            if (logCorrect) {
-                LOGE("%s:  CORRECT pixel{row:%d, col%d}", label, row, column);
-            }
-        } else {
-            if (logIncorrect) {
-                const float4 log_expected = pixel_traits<float4>::translate(expected_pixel);
-                const float4 log_observed = pixel_traits<float4>::translate(observed_pixel);
+        if (test_output_verbose && ((pixel_is_correct && logCorrect) || (!pixel_is_correct && logIncorrect))) {
+            const float4 log_expected = pixel_traits<float4>::translate(expected_pixel);
+            const float4 log_observed = pixel_traits<float4>::translate(observed_pixel);
 
-                LOGE("%s: INCORRECT pixel{row:%d, col%d} expected{x=%f, y=%f, z=%f, w=%f} observed{x=%f, y=%f, z=%f, w=%f}",
-                     label, row, column,
-                     log_expected.x, log_expected.y, log_expected.z, log_expected.w,
-                     log_observed.x, log_observed.y, log_observed.z, log_observed.w);
-            }
+            LOGE("%s: %s pixel{row:%d, col%d} expected{x=%f, y=%f, z=%f, w=%f} observed{x=%f, y=%f, z=%f, w=%f}",
+                 pixel_is_correct ? "CORRECT" : "INCORRECT",
+                 label, row, column,
+                 log_expected.x, log_expected.y, log_expected.z, log_expected.w,
+                 log_observed.x, log_observed.y, log_observed.z, log_observed.w);
         }
 
         return pixel_is_correct;
@@ -2358,8 +2355,10 @@ namespace test_utils {
             }
         }
 
-        LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels,
-             num_incorrect_pixels);
+        if (test_output_verbose) {
+            LOGE("%s: Correct pixels=%d; Incorrect pixels=%d",
+                 label, num_correct_pixels, num_incorrect_pixels);
+        }
 
         return (0 == num_incorrect_pixels && 0 < num_correct_pixels);
     }
@@ -2390,8 +2389,10 @@ namespace test_utils {
             }
         }
 
-        LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels,
-             num_incorrect_pixels);
+        if (test_output_verbose) {
+            LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels,
+                 num_incorrect_pixels);
+        }
 
         return (0 == num_incorrect_pixels && 0 < num_correct_pixels);
     }
@@ -2464,11 +2465,18 @@ namespace test_utils {
         Results result = no_result;
 
         if (testFn) {
-            result += runInExceptionContext(module.getName() + "/" + kernel.getEntryPoint(),
+            const std::string label = module.getName() + "/" + kernel.getEntryPoint();
+            result = runInExceptionContext(label,
                                   "invoking kernel",
                                   [&]() {
                                       return testFn(module, kernel, info, samplers, logIncorrect, logCorrect);
                                   });
+
+            if ((count_successes(result) > 0 && logCorrect) || (count_failures(result) > 0 && logIncorrect)) {
+                LOGE("%s: Successes=%d Failures=%d",
+                     label.c_str(),
+                     count_successes(result), count_failures(result));
+            }
         }
 
         return result;
@@ -2569,21 +2577,14 @@ test_utils::Results test_readlocalsize(const clspv_utils::kernel_module& module,
     const bool success = (expected.x == std::get<0>(observed) &&
                           expected.y == std::get<1>(observed) &&
                           1 == std::get<2>(observed));
-    if (success) {
-        if (logCorrect) {
-            const std::string label = module.getName() + "/" + kernel.getEntryPoint();
-            LOGE("%s:  CORRECT workgroup_size{x:%d, y:%d, z:%d}", label.c_str(),
-                 std::get<0>(observed), std::get<1>(observed), std::get<2>(observed));
-        }
-    }
-    else {
-        if (logIncorrect) {
-            const std::string label = module.getName() + "/" + kernel.getEntryPoint();
-            LOGE("%s: INCORRECT workgroup_size expected{x=%d, y=%d, z=1} observed{x=%d, y=%d, z=%d}",
-                 label.c_str(),
-                 expected.x, expected.y,
-                 std::get<0>(observed), std::get<1>(observed), std::get<2>(observed));
-        }
+
+    if (test_output_verbose && ((success && logCorrect) || (!success && logIncorrect))) {
+        const std::string label = module.getName() + "/" + kernel.getEntryPoint();
+        LOGE("%s: %s workgroup_size expected{x=%d, y=%d, z=1} observed{x=%d, y=%d, z=%d}",
+             success ? "CORRECT" : "INCORRECT",
+             label.c_str(),
+             expected.x, expected.y,
+             std::get<0>(observed), std::get<1>(observed), std::get<2>(observed));
     }
 
     return (success ? std::make_pair(1, 0) : std::make_pair(0, 1));
@@ -2921,7 +2922,7 @@ test_utils::Results run_all_tests(const sample_info& info, const std::vector<VkS
     auto test_results = test_utils::no_result;
 
     for (auto m : module_tests) {
-        test_results += test_utils::test_module(m.name, m.kernelTests, info, samplers, false, false);
+        test_results += test_utils::test_module(m.name, m.kernelTests, info, samplers, true, false);
     }
 
     return test_results;
