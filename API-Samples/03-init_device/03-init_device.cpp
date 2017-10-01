@@ -2022,7 +2022,7 @@ void run_fill_kernel(const sample_info&             info,
     const auto num_workgroups = std::make_tuple((scalars.inWidth + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
                                                 (scalars.inHeight + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
 
-    clspv_utils::kernel_module     module(info.device, info.desc_pool, "fills");
+    clspv_utils::kernel_module     module(info.device, info.desc_pool, "Fills");
     clspv_utils::kernel            kern(info.device, module, "FillWithColorKernel", workgroup_sizes);
     clspv_utils::kernel_invocation invocation(info.device, info.cmd_pool, info.memory_properties);
 
@@ -2078,7 +2078,7 @@ void run_copybuffertoimage_kernel(const sample_info& info,
     const auto num_workgroups = std::make_tuple((width + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
                                                 (height + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
 
-    clspv_utils::kernel_module     module(info.device, info.desc_pool, "memory");
+    clspv_utils::kernel_module     module(info.device, info.desc_pool, "Memory");
     clspv_utils::kernel            kern(info.device, module, "CopyBufferToImageKernel", workgroup_sizes);
     clspv_utils::kernel_invocation invocation(info.device, info.cmd_pool, info.memory_properties);
 
@@ -2132,7 +2132,7 @@ void run_copyimagetobuffer_kernel(const sample_info& info,
     const auto num_workgroups = std::make_tuple((width + std::get<0>(workgroup_sizes) - 1) / std::get<0>(workgroup_sizes),
                                                 (height + std::get<1>(workgroup_sizes) - 1) / std::get<1>(workgroup_sizes));
 
-    clspv_utils::kernel_module     module(info.device, info.desc_pool, "memory");
+    clspv_utils::kernel_module     module(info.device, info.desc_pool, "Memory");
     clspv_utils::kernel            kern(info.device, module, "CopyImageToBufferKernel", workgroup_sizes);
     clspv_utils::kernel_invocation invocation(info.device, info.cmd_pool, info.memory_properties);
 
@@ -2852,8 +2852,8 @@ int sample_main(int argc, char *argv[]) {
                    std::bind(create_compatible_sampler, info.device, std::placeholders::_1));
 
     auto loadResults = test_utils::test_module("localsize", info, samplers, false, false);
-    loadResults += test_utils::test_module("fills", info, samplers, false, false);
-    loadResults += test_utils::test_module("memory", info, samplers, false, false);
+    loadResults += test_utils::test_module("Fills", info, samplers, false, false);
+    loadResults += test_utils::test_module("Memory", info, samplers, false, false);
 
     const test_t tests[] = {
             { test_localsize_kernel, "test_localsize_kernel" },
