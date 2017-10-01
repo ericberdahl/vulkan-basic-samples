@@ -2047,23 +2047,6 @@ void invoke_fill_kernel(const clspv_utils::kernel_module&   module,
     invocation.run(info.graphics_queue, module, kernel, num_workgroups);
 }
 
-void run_fill_kernel(const sample_info&             info,
-                     const std::vector<VkSampler>&  samplers,
-                     VkBuffer                       dst_buffer,
-                     int                            pitch,
-                     int                            device_format,
-                     int                            offset_x,
-                     int                            offset_y,
-                     int                            width,
-                     int                            height,
-                     const float4&                  color) {
-    const clspv_utils::WorkgroupDimensions workgroup_sizes(32, 32);
-
-    clspv_utils::kernel_module     module(info.device, info.desc_pool, "Fills");
-    clspv_utils::kernel            kernel(info.device, module, "FillWithColorKernel", workgroup_sizes);
-    return invoke_fill_kernel(module, kernel, info, samplers, dst_buffer, pitch, device_format, offset_x, offset_y, width, height, color);
-}
-
 void invoke_copybuffertoimage_kernel(const clspv_utils::kernel_module&   module,
                                      const clspv_utils::kernel&          kernel,
                                      const sample_info& info,
@@ -2541,8 +2524,8 @@ namespace test_utils {
 
     Results test_kernel_invocation(const clspv_utils::kernel_module&    module,
                                    const clspv_utils::kernel&           kernel,
-                                   test_utils::test_kernel_fn*          first,
-                                   test_utils::test_kernel_fn*          last,
+                                   const test_utils::test_kernel_fn*    first,
+                                   const test_utils::test_kernel_fn*    last,
                                    const sample_info&                   info,
                                    const std::vector<VkSampler>&        samplers,
                                    bool                                 logIncorrect = false,
@@ -2655,10 +2638,12 @@ test_utils::Results test_readlocalsize(const clspv_utils::kernel_module& module,
 };
 
 template <typename PixelType>
-test_utils::Results test_fill_kernel(const sample_info&            info,
-                                     const std::vector<VkSampler>& samplers,
-                                     bool                          logIncorrect = false,
-                                     bool                          logCorrect = false) {
+test_utils::Results test_fill(const clspv_utils::kernel_module&  module,
+                              const clspv_utils::kernel&         kernel,
+                              const sample_info&            info,
+                              const std::vector<VkSampler>& samplers,
+                              bool                          logIncorrect = false,
+                              bool                          logCorrect = false) {
     const std::string typeLabel = pixel_traits<PixelType>::type_name;
 
     std::string testLabel = "fills.spv/FillWithColorKernel/";
@@ -2680,14 +2665,16 @@ test_utils::Results test_fill_kernel(const sample_info&            info,
         std::fill(dst_data, dst_data + (buffer_width * buffer_height), src_value);
     }
 
-    run_fill_kernel(info,
-                    samplers,
-                    dst_buffer.buf, // dst_buffer
-                    buffer_width,   // pitch
-                    pixel_traits<PixelType>::device_pixel_format, // device_format
-                    0, 0, // offset_x, offset_y
-                    buffer_width, buffer_height, // width, height
-                    color); // color
+    invoke_fill_kernel(module,
+                       kernel,
+                       info,
+                       samplers,
+                       dst_buffer.buf, // dst_buffer
+                       buffer_width,   // pitch
+                       pixel_traits<PixelType>::device_pixel_format, // device_format
+                       0, 0, // offset_x, offset_y
+                       buffer_width, buffer_height, // width, height
+                       color); // color
 
     const bool success = test_utils::check_results<PixelType>(dst_buffer.mem,
                                                   buffer_width, buffer_height,
@@ -2700,6 +2687,25 @@ test_utils::Results test_fill_kernel(const sample_info&            info,
     dst_buffer.reset();
 
     return (success ? test_utils::success : std::make_pair(0, 1));
+}
+
+test_utils::Results test_fill_series(const clspv_utils::kernel_module&  module,
+                                     const clspv_utils::kernel&         kernel,
+                                     const sample_info&                 info,
+                                     const std::vector<VkSampler>&      samplers,
+                                     bool                               logIncorrect = false,
+                                     bool                               logCorrect = false) {
+    const test_utils::test_kernel_fn tests[] = {
+            test_fill<float4>,
+            test_fill<half4>,
+    };
+
+    return test_utils::test_kernel_invocation(module,
+                                              kernel,
+                                              std::begin(tests), std::end(tests),
+                                              info,
+                                              samplers,
+                                              logIncorrect, logCorrect);
 }
 
 /* ============================================================================================== */
@@ -2855,18 +2861,6 @@ test_utils::Results test_series(const test_t*                    first,
     return results;
 };
 
-test_utils::Results test_fill_series(const sample_info&            info,
-                                     const std::vector<VkSampler>& samplers,
-                                     bool                          logIncorrect = false,
-                                     bool                          logCorrect = false) {
-    const test_t tests[] = {
-            { test_fill_kernel<float4>, "test_fill_kernel<float4>" },
-            { test_fill_kernel<half4>, "test_fill_kernel<half4>" },
-    };
-
-    return test_series(std::begin(tests), std::end(tests), info, samplers, logIncorrect, logCorrect);
-}
-
 template <typename ImagePixelType>
 test_utils::Results test_copytoimage_series(const sample_info&           info,
                                            const std::vector<VkSampler>& samplers,
@@ -2956,7 +2950,9 @@ const test_utils::module_test_bundle module_tests[] = {
                              }
         },
         {
-                "Fills", {}
+                "Fills", {
+                                 { "FillWithColorKernel", test_fill_series }
+                         }
         },
         {
                 "Memory", {}
@@ -3014,7 +3010,6 @@ int sample_main(int argc, char *argv[]) {
     auto test_results = run_all_tests(info, samplers);
 
     const test_t tests[] = {
-            { test_fill_series, "test_fill_series" },
             { test_copytoimage_matrix, "test_copytoimage_matrix" },
             { test_copyfromimage_matrix, "test_copyfromimage_matrix" },
     };
