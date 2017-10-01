@@ -2106,31 +2106,6 @@ void invoke_copybuffertoimage_kernel(const clspv_utils::kernel_module&   module,
     invocation.run(info.graphics_queue, module, kernel, num_workgroups);
 }
 
-void run_copybuffertoimage_kernel(const sample_info& info,
-                                  const std::vector<VkSampler>& samplers,
-                                  VkBuffer  src_buffer,
-                                  VkImageView   dst_image,
-                                  int src_offset,
-                                  int src_pitch,
-                                  cl_channel_order src_channel_order,
-                                  cl_channel_type src_channel_type,
-                                  bool swap_components,
-                                  bool premultiply,
-                                  int width,
-                                  int height) {
-    const clspv_utils::WorkgroupDimensions workgroup_sizes(32, 32);
-
-    clspv_utils::kernel_module     module(info.device, info.desc_pool, "Memory");
-    clspv_utils::kernel            kernel(info.device, module, "CopyBufferToImageKernel", workgroup_sizes);
-    invoke_copybuffertoimage_kernel(module, kernel, info, samplers,
-                                    src_buffer, dst_image,
-                                    src_offset, src_pitch,
-                                    src_channel_order, src_channel_type,
-                                    swap_components,
-                                    premultiply,
-                                    width, height);
-}
-
 void invoke_copyimagetobuffer_kernel(const clspv_utils::kernel_module&   module,
                                      const clspv_utils::kernel&          kernel,
                                      const sample_info& info,
@@ -2184,29 +2159,6 @@ void invoke_copyimagetobuffer_kernel(const clspv_utils::kernel_module&   module,
     invocation.addPodArgument(scalars);
 
     invocation.run(info.graphics_queue, module, kernel, num_workgroups);
-}
-
-void run_copyimagetobuffer_kernel(const sample_info& info,
-                                  const std::vector<VkSampler>& samplers,
-                                  VkImageView src_image,
-                                  VkBuffer dst_buffer,
-                                  int dst_offset,
-                                  int dst_pitch,
-                                  cl_channel_order dst_channel_order,
-                                  cl_channel_type dst_channel_type,
-                                  bool swap_components,
-                                  int width,
-                                  int height) {
-    const clspv_utils::WorkgroupDimensions workgroup_sizes(32, 32);
-
-    clspv_utils::kernel_module     module(info.device, info.desc_pool, "Memory");
-    clspv_utils::kernel            kernel(info.device, module, "CopyImageToBufferKernel", workgroup_sizes);
-    invoke_copyimagetobuffer_kernel(module, kernel, info, samplers,
-                                    src_image, dst_buffer,
-                                    dst_offset, dst_pitch,
-                                    dst_channel_order, dst_channel_type,
-                                    swap_components,
-                                    width, height);
 }
 
 std::tuple<int,int,int> invoke_localsize_kernel(const clspv_utils::kernel_module&   module,
@@ -2711,10 +2663,12 @@ test_utils::Results test_fill_series(const clspv_utils::kernel_module&  module,
 /* ============================================================================================== */
 
 template <typename BufferPixelType, typename ImagePixelType>
-test_utils::Results test_copytoimage_kernel(const sample_info&           info,
-                                           const std::vector<VkSampler>& samplers,
-                                           bool                          logIncorrect = false,
-                                           bool                          logCorrect = false) {
+test_utils::Results test_copytoimage(const clspv_utils::kernel_module&  module,
+                                     const clspv_utils::kernel&         kernel,
+                                     const sample_info&                 info,
+                                     const std::vector<VkSampler>&      samplers,
+                                     bool                               logIncorrect = false,
+                                     bool                               logCorrect = false) {
     std::string typeLabel = pixel_traits<BufferPixelType>::type_name;
     typeLabel += '-';
     typeLabel += pixel_traits<ImagePixelType>::type_name;
@@ -2746,18 +2700,19 @@ test_utils::Results test_copytoimage_kernel(const sample_info&           info,
         std::fill(dst_data, dst_data + (buffer_width * buffer_height), dst_value);
     }
 
-    run_copybuffertoimage_kernel(info,
-                                 samplers,
-                                 src_buffer.buf,
-                                 dstImage.view,
-                                 0,
-                                 buffer_width,
-                                 pixel_traits<BufferPixelType>::cl_pixel_order,
-                                 pixel_traits<BufferPixelType>::cl_pixel_type,
-                                 false,
-                                 false,
-                                 buffer_width,
-                                 buffer_height);
+    invoke_copybuffertoimage_kernel(module, kernel,
+                                    info,
+                                    samplers,
+                                    src_buffer.buf,
+                                    dstImage.view,
+                                    0,
+                                    buffer_width,
+                                    pixel_traits<BufferPixelType>::cl_pixel_order,
+                                    pixel_traits<BufferPixelType>::cl_pixel_type,
+                                    false,
+                                    false,
+                                    buffer_width,
+                                    buffer_height);
 
     const bool success = test_utils::check_results<BufferPixelType, ImagePixelType>(src_buffer.mem, dstImage.mem,
                                                                         buffer_width, buffer_height,
@@ -2772,13 +2727,66 @@ test_utils::Results test_copytoimage_kernel(const sample_info&           info,
     return (success ? test_utils::success : std::make_pair(0, 1));
 }
 
+template <typename ImagePixelType>
+test_utils::Results test_copytoimage_series(const clspv_utils::kernel_module&   module,
+                                            const clspv_utils::kernel&          kernel,
+                                            const sample_info&                  info,
+                                            const std::vector<VkSampler>&       samplers,
+                                            bool                                logIncorrect = false,
+                                            bool                                logCorrect = false) {
+    const test_utils::test_kernel_fn tests[] = {
+            test_copytoimage<uchar, ImagePixelType>,
+            test_copytoimage<uchar4, ImagePixelType>,
+            test_copytoimage<half, ImagePixelType>,
+            test_copytoimage<half4, ImagePixelType>,
+            test_copytoimage<float, ImagePixelType>,
+            test_copytoimage<float2, ImagePixelType>,
+            test_copytoimage<float4, ImagePixelType>,
+    };
+
+    return test_utils::test_kernel_invocation(module, kernel,
+                                              std::begin(tests), std::end(tests),
+                                              info,
+                                              samplers,
+                                              logIncorrect,
+                                              logCorrect);
+}
+
+test_utils::Results test_copytoimage_matrix(const clspv_utils::kernel_module&   module,
+                                            const clspv_utils::kernel&          kernel,
+                                            const sample_info&                  info,
+                                            const std::vector<VkSampler>&       samplers,
+                                            bool                                logIncorrect = false,
+                                            bool                                logCorrect = false) {
+    const test_utils::test_kernel_fn tests[] = {
+            test_copytoimage_series<float4>,
+            test_copytoimage_series<half4>,
+            test_copytoimage_series<uchar4>,
+            test_copytoimage_series<float2>,
+            test_copytoimage_series<half2>,
+            test_copytoimage_series<uchar2>,
+            test_copytoimage_series<float>,
+            test_copytoimage_series<half>,
+            test_copytoimage_series<uchar>,
+    };
+
+    return test_utils::test_kernel_invocation(module, kernel,
+                                              std::begin(tests), std::end(tests),
+                                              info,
+                                              samplers,
+                                              logIncorrect,
+                                              logCorrect);
+}
+
 /* ============================================================================================== */
 
 template <typename BufferPixelType, typename ImagePixelType>
-test_utils::Results test_copyfromimage_kernel(const sample_info&            info,
-                                             const std::vector<VkSampler>& samplers,
-                                             bool                          logIncorrect = false,
-                                             bool                          logCorrect = false) {
+test_utils::Results test_copyfromimage(const clspv_utils::kernel_module&    module,
+                                       const clspv_utils::kernel&           kernel,
+                                       const sample_info&                   info,
+                                       const std::vector<VkSampler>&        samplers,
+                                       bool                                 logIncorrect = false,
+                                       bool                                 logCorrect = false) {
     std::string typeLabel = pixel_traits<BufferPixelType>::type_name;
     typeLabel += '-';
     typeLabel += pixel_traits<ImagePixelType>::type_name;
@@ -2810,17 +2818,18 @@ test_utils::Results test_copyfromimage_kernel(const sample_info&            info
         std::fill(dst_data, dst_data + (buffer_width * buffer_height), dst_value);
     }
 
-    run_copyimagetobuffer_kernel(info,
-                                 samplers,
-                                 srcImage.view,
-                                 dst_buffer.buf,
-                                 0,
-                                 buffer_width,
-                                 pixel_traits<BufferPixelType>::cl_pixel_order,
-                                 pixel_traits<BufferPixelType>::cl_pixel_type,
-                                 false,
-                                 buffer_width,
-                                 buffer_height);
+    invoke_copyimagetobuffer_kernel(module, kernel,
+                                    info,
+                                    samplers,
+                                    srcImage.view,
+                                    dst_buffer.buf,
+                                    0,
+                                    buffer_width,
+                                    pixel_traits<BufferPixelType>::cl_pixel_order,
+                                    pixel_traits<BufferPixelType>::cl_pixel_type,
+                                    false,
+                                    buffer_width,
+                                    buffer_height);
 
     const bool success = test_utils::check_results<ImagePixelType, BufferPixelType>(srcImage.mem, dst_buffer.mem,
                                                                         buffer_width, buffer_height,
@@ -2835,111 +2844,57 @@ test_utils::Results test_copyfromimage_kernel(const sample_info&            info
     return (success ? test_utils::success : test_utils::failure);
 }
 
-/* ============================================================================================== */
-
-struct test_t {
-    typedef test_utils::Results (*fn)(const sample_info&, const std::vector<VkSampler>&, bool, bool);
-
-    fn          func;
-    std::string label;
-};
-
-test_utils::Results test_series(const test_t*                    first,
-                                const test_t*                    last,
-                                const sample_info&               info,
-                                const std::vector<VkSampler>&    samplers,
-                                bool                             logIncorrect = false,
-                                bool                             logCorrect = false) {
-    auto results = std::make_pair(0, 0);
-
-    for (; first != last; ++first) {
-        results += test_utils::runInExceptionContext(first->label.c_str(), "", [&]() {
-            return (*first->func)(info, samplers, logIncorrect, logCorrect);
-        });
-    }
-
-    return results;
-};
-
 template <typename ImagePixelType>
-test_utils::Results test_copytoimage_series(const sample_info&           info,
-                                           const std::vector<VkSampler>& samplers,
-                                           bool                          logIncorrect = false,
-                                           bool                          logCorrect = false) {
-    std::string labelEnd = pixel_traits<ImagePixelType>::type_name;
-    labelEnd += ">";
-
-    const test_t tests[] = {
-            { test_copytoimage_kernel<uchar, ImagePixelType>, "test_copytoimage_kernel<uchar, " + labelEnd },
-            { test_copytoimage_kernel<uchar4, ImagePixelType>, "test_copytoimage_kernel<uchar4, " + labelEnd },
-            { test_copytoimage_kernel<half, ImagePixelType>, "test_copytoimage_kernel<half, " + labelEnd },
-            { test_copytoimage_kernel<half4, ImagePixelType>, "test_copytoimage_kernel<half4, " + labelEnd },
-            { test_copytoimage_kernel<float, ImagePixelType>, "test_copytoimage_kernel<float, " + labelEnd },
-            { test_copytoimage_kernel<float2, ImagePixelType>, "test_copytoimage_kernel<float2, " + labelEnd },
-            { test_copytoimage_kernel<float4, ImagePixelType>, "test_copytoimage_kernel<float4, " + labelEnd },
+test_utils::Results test_copyfromimage_series(const clspv_utils::kernel_module&     module,
+                                              const clspv_utils::kernel&            kernel,
+                                              const sample_info&                    info,
+                                              const std::vector<VkSampler>&         samplers,
+                                              bool                                  logIncorrect = false,
+                                              bool                                  logCorrect = false) {
+    const test_utils::test_kernel_fn tests[] = {
+            test_copyfromimage<uchar, ImagePixelType>,
+            test_copyfromimage<uchar4, ImagePixelType>,
+            test_copyfromimage<half, ImagePixelType>,
+            test_copyfromimage<half4, ImagePixelType>,
+            test_copyfromimage<float, ImagePixelType>,
+            test_copyfromimage<float2, ImagePixelType>,
+            test_copyfromimage<float4, ImagePixelType>,
     };
 
-    return test_series(std::begin(tests), std::end(tests), info, samplers, logIncorrect, logCorrect);
+    return test_utils::test_kernel_invocation(module, kernel,
+                                              std::begin(tests), std::end(tests),
+                                              info,
+                                              samplers,
+                                              logIncorrect,
+                                              logCorrect);
 }
 
-template <typename ImagePixelType>
-test_utils::Results test_copyfromimage_series(const sample_info&            info,
-                                              const std::vector<VkSampler>& samplers,
-                                              bool                          logIncorrect = false,
-                                              bool                          logCorrect = false) {
-    std::string labelEnd = pixel_traits<ImagePixelType>::type_name;
-    labelEnd += ">";
-
-    const test_t tests[] = {
-            { test_copyfromimage_kernel<uchar, ImagePixelType>, "test_copyfromimage_kernel<uchar, " + labelEnd },
-            { test_copyfromimage_kernel<uchar4, ImagePixelType>, "test_copyfromimage_kernel<uchar4, " + labelEnd },
-            { test_copyfromimage_kernel<half, ImagePixelType>, "test_copyfromimage_kernel<half, " + labelEnd },
-            { test_copyfromimage_kernel<half4, ImagePixelType>, "test_copyfromimage_kernel<half4, " + labelEnd },
-            { test_copyfromimage_kernel<float, ImagePixelType>, "test_copyfromimage_kernel<float, " + labelEnd },
-            { test_copyfromimage_kernel<float2, ImagePixelType>, "test_copyfromimage_kernel<float2, " + labelEnd },
-            { test_copyfromimage_kernel<float4, ImagePixelType>, "test_copyfromimage_kernel<float4, " + labelEnd }
+test_utils::Results test_copyfromimage_matrix(const clspv_utils::kernel_module&     module,
+                                              const clspv_utils::kernel&            kernel,
+                                              const sample_info&                    info,
+                                              const std::vector<VkSampler>&         samplers,
+                                              bool                                  logIncorrect = false,
+                                              bool                                  logCorrect = false) {
+    const test_utils::test_kernel_fn tests[] = {
+            test_copyfromimage_series<float4>,
+            test_copyfromimage_series<half4>,
+            test_copyfromimage_series<uchar4>,
+            test_copyfromimage_series<float2>,
+            test_copyfromimage_series<half2>,
+            test_copyfromimage_series<uchar2>,
+            test_copyfromimage_series<float>,
+            test_copyfromimage_series<half>,
+            test_copyfromimage_series<uchar>,
     };
 
-    return test_series(std::begin(tests), std::end(tests), info, samplers, logIncorrect, logCorrect);
+    return test_utils::test_kernel_invocation(module, kernel,
+                                              std::begin(tests), std::end(tests),
+                                              info,
+                                              samplers,
+                                              logIncorrect,
+                                              logCorrect);
 }
 
-test_utils::Results test_copytoimage_matrix(const sample_info&            info,
-                                            const std::vector<VkSampler>& samplers,
-                                            bool                          logIncorrect = false,
-                                            bool                          logCorrect = false) {
-    const test_t tests[] = {
-            { test_copytoimage_series<float4>, "test_copytoimage_series<float4>" },
-            { test_copytoimage_series<half4>, "test_copytoimage_series<half4>" },
-            { test_copytoimage_series<uchar4>, "test_copytoimage_series<uchar4>" },
-            { test_copytoimage_series<float2>, "test_copytoimage_series<float2>" },
-            { test_copytoimage_series<half2>, "test_copytoimage_series<half2>" },
-            { test_copytoimage_series<uchar2>, "test_copytoimage_series<uchar2>" },
-            { test_copytoimage_series<float>, "test_copytoimage_series<float>" },
-            { test_copytoimage_series<half>, "test_copytoimage_series<half>" },
-            { test_copytoimage_series<uchar>, "test_copytoimage_series<uchar>" },
-    };
-
-    return test_series(std::begin(tests), std::end(tests), info, samplers, logIncorrect, logCorrect);
-}
-
-test_utils::Results test_copyfromimage_matrix(const sample_info&            info,
-                                              const std::vector<VkSampler>& samplers,
-                                              bool                          logIncorrect = false,
-                                              bool                          logCorrect = false) {
-    const test_t tests[] = {
-            { test_copyfromimage_series<float4>, "test_copyfromimage_series<float4>" },
-            { test_copyfromimage_series<half4>, "test_copyfromimage_series<half4>" },
-            { test_copyfromimage_series<uchar4>, "test_copyfromimage_series<uchar4>" },
-            { test_copyfromimage_series<float2>, "test_copyfromimage_series<float2>" },
-            { test_copyfromimage_series<half2>, "test_copyfromimage_series<half2>" },
-            { test_copyfromimage_series<uchar2>, "test_copyfromimage_series<uchar2>" },
-            { test_copyfromimage_series<float>, "test_copyfromimage_series<float>" },
-            { test_copyfromimage_series<half>, "test_copyfromimage_series<half>" },
-            { test_copyfromimage_series<uchar>, "test_copyfromimage_series<uchar>" },
-    };
-
-    return test_series(std::begin(tests), std::end(tests), info, samplers, logIncorrect, logCorrect);
-}
 
 /* ============================================================================================== */
 
@@ -2951,11 +2906,14 @@ const test_utils::module_test_bundle module_tests[] = {
         },
         {
                 "Fills", {
-                                 { "FillWithColorKernel", test_fill_series }
+                                 { "FillWithColorKernel", test_fill_series, { 32, 32 } }
                          }
         },
         {
-                "Memory", {}
+                "Memory", {
+                                  { "CopyBufferToImageKernel", test_copytoimage_matrix, { 32, 32 } },
+                                  { "CopyImageToBufferKernel", test_copyfromimage_matrix, { 32, 32 } }
+                          }
         },
 };
 
@@ -3007,14 +2965,7 @@ int sample_main(int argc, char *argv[]) {
                    std::bind(create_compatible_sampler, info.device, std::placeholders::_1));
 
 
-    auto test_results = run_all_tests(info, samplers);
-
-    const test_t tests[] = {
-            { test_copytoimage_matrix, "test_copytoimage_matrix" },
-            { test_copyfromimage_matrix, "test_copyfromimage_matrix" },
-    };
-
-    test_results += test_series(std::begin(tests), std::end(tests), info, samplers);
+    const auto test_results = run_all_tests(info, samplers);
 
     //
     // Clean up
