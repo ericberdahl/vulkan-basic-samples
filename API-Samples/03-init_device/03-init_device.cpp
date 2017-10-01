@@ -309,6 +309,8 @@ namespace vulkan_utils {
 
 } // namespace vulkan_utils
 
+/* ============================================================================================== */
+
 namespace clspv_utils {
 
     namespace details {
@@ -375,6 +377,9 @@ namespace clspv_utils {
         VkDescriptorSet getLiteralSamplersDescriptorSet() const;
         VkDescriptorSet getKernelArgumentDescriptorSet(const std::string& entryPoint) const;
 
+        std::string                 getName() const { return mName; }
+        std::vector<std::string>    getEntryPoints() const;
+
         VkPipeline      createPipeline(const std::string&           entryPoint,
                                        const WorkgroupDimensions&   work_group_sizes) const;
 
@@ -386,6 +391,7 @@ namespace clspv_utils {
         details::pipeline_layout        createPipelineLayout(const details::spv_map& spvMap);
 
     private:
+        std::string                         mName;
         details::pipeline_layout            mPipelineLayout;
 
         VkDevice                            mDevice;
@@ -490,8 +496,6 @@ namespace clspv_utils {
     }
 }
 
-/* ============================================================================================== */
-
 namespace clspv_utils {
 
     namespace {
@@ -531,14 +535,18 @@ namespace clspv_utils {
             return result;
         }
 
-        VkShaderModule create_shader(VkDevice device, const char* spvFileName) {
-            std::FILE* spv_file = AndroidFopen(spvFileName, "rb");
-            assert(spv_file != NULL);
+        VkShaderModule create_shader(VkDevice device, const std::string& spvFilename) {
+            std::FILE* spv_file = AndroidFopen(spvFilename.c_str(), "rb");
+            if (!spv_file) {
+                throw std::runtime_error("can't open file: " + spvFilename);
+            }
 
             std::fseek(spv_file, 0, SEEK_END);
             // Use vector of uint32_t to ensure alignment is satisfied.
             const auto num_bytes = std::ftell(spv_file);
-            assert(0 == (num_bytes % sizeof(uint32_t)));
+            if (0 != (num_bytes % sizeof(uint32_t))) {
+                throw std::runtime_error("file size of " + spvFilename + " inappropriate for spv file");
+            }
             const auto num_words = (num_bytes + sizeof(uint32_t) - 1) / sizeof(uint32_t);
             std::vector<uint32_t> spvModule(num_words);
             assert(num_bytes == (spvModule.size() * sizeof(uint32_t)));
@@ -709,6 +717,7 @@ namespace clspv_utils {
     kernel_module::kernel_module(VkDevice           device,
                                  VkDescriptorPool   pool,
                                  const std::string& moduleName) :
+            mName(moduleName),
             mPipelineLayout(),
             mDevice(device),
             mDescriptors(),
@@ -767,6 +776,16 @@ namespace clspv_utils {
 
         return result;
 
+    }
+
+    std::vector<std::string> kernel_module::getEntryPoints() const {
+        std::vector<std::string> result;
+
+        std::transform(mSpvMap.kernels.begin(), mSpvMap.kernels.end(),
+                       std::back_inserter(result),
+                       [](const details::spv_map::kernel& k) { return k.name; });
+
+        return result;
     }
 
     std::vector<VkDescriptorSet> kernel_module::allocateDescriptorSet(VkDescriptorPool pool) const {
@@ -2161,207 +2180,293 @@ std::tuple<int,int,int> run_localsize_kernel(const sample_info&             info
 
 /* ============================================================================================== */
 
-template <typename ExpectedPixelType, typename ObservedPixelType>
-struct pixel_promotion {
-    static constexpr const int expected_vec_size = pixel_traits<ExpectedPixelType>::num_components;
-    static constexpr const int observed_vec_size = pixel_traits<ObservedPixelType>::num_components;
-    static constexpr const int vec_size = (expected_vec_size > observed_vec_size ? observed_vec_size : expected_vec_size);
+namespace test_utils {
 
-    typedef typename pixel_traits<ExpectedPixelType>::component_t   expected_comp_type;
-    typedef typename pixel_traits<ObservedPixelType>::component_t   observed_comp_type;
+    typedef std::pair<int,int>  Results;
 
-    static constexpr const bool expected_is_smaller = sizeof(expected_comp_type) < sizeof(observed_comp_type);
-    typedef typename std::conditional<expected_is_smaller, expected_comp_type, observed_comp_type>::type smaller_comp_type;
-    typedef typename std::conditional<!expected_is_smaller, expected_comp_type, observed_comp_type>::type larger_comp_type;
+    int count_successes(Results r) { return r.first; }
+    int count_failures(Results r) { return r.second; }
 
-    static constexpr const bool smaller_is_floating = std::is_floating_point<smaller_comp_type>::value;
-    typedef typename std::conditional<smaller_is_floating, smaller_comp_type, larger_comp_type>::type comp_type;
+    const Results   no_result = std::make_pair(0, 0);
+    const Results   success = std::make_pair(1, 0);
+    const Results   failure = std::make_pair(0, 1);
 
-    typedef typename pixel_vector<comp_type, vec_size>::type promotion_type;
-};
+    template<typename ExpectedPixelType, typename ObservedPixelType>
+    struct pixel_promotion {
+        static constexpr const int expected_vec_size = pixel_traits<ExpectedPixelType>::num_components;
+        static constexpr const int observed_vec_size = pixel_traits<ObservedPixelType>::num_components;
+        static constexpr const int vec_size = (expected_vec_size > observed_vec_size
+                                               ? observed_vec_size : expected_vec_size);
 
-template <typename T> struct pixel_comparator {};
+        typedef typename pixel_traits<ExpectedPixelType>::component_t expected_comp_type;
+        typedef typename pixel_traits<ObservedPixelType>::component_t observed_comp_type;
 
-template <>
-struct pixel_comparator<float> {
-    static bool is_equal(float l, float r) {
-        const int ulp = 2;
-        return almost_equal(l, r, ulp);
-    }
-};
+        static constexpr const bool expected_is_smaller =
+                sizeof(expected_comp_type) < sizeof(observed_comp_type);
+        typedef typename std::conditional<expected_is_smaller, expected_comp_type, observed_comp_type>::type smaller_comp_type;
+        typedef typename std::conditional<!expected_is_smaller, expected_comp_type, observed_comp_type>::type larger_comp_type;
 
-template <>
-struct pixel_comparator<half> {
-    static bool is_equal(half l, half r) {
-        const int ulp = 2;
-        return almost_equal(l, r, ulp);
-    }
-};
+        static constexpr const bool smaller_is_floating = std::is_floating_point<smaller_comp_type>::value;
+        typedef typename std::conditional<smaller_is_floating, smaller_comp_type, larger_comp_type>::type comp_type;
 
-template <>
-struct pixel_comparator<uchar> {
-    static bool is_equal(uchar l, uchar r) {
-        return pixel_comparator<float>::is_equal(pixel_traits<float>::translate(l),
-                                                 pixel_traits<float>::translate(r));
-    }
-};
+        typedef typename pixel_vector<comp_type, vec_size>::type promotion_type;
+    };
 
-template <typename T>
-struct pixel_comparator< vec2<T> > {
-    static bool is_equal(const vec2<T>& l, const vec2<T>& r) {
-        return pixel_comparator<T>::is_equal(l.x, r.x)
-               && pixel_comparator<T>::is_equal(l.y, r.y);
-    }
-};
+    template<typename T>
+    struct pixel_comparator {
+    };
 
-template <typename T>
-struct pixel_comparator< vec4<T> > {
-    static bool is_equal(const vec4<T> &l, const vec4<T> &r) {
-        return pixel_comparator<T>::is_equal(l.x, r.x)
-               && pixel_comparator<T>::is_equal(l.y, r.y)
-               && pixel_comparator<T>::is_equal(l.z, r.z)
-               && pixel_comparator<T>::is_equal(l.w, r.w);
-    }
-};
-
-template <typename T>
-bool pixel_compare(const T& l, const T& r) {
-    return pixel_comparator<T>::is_equal(l, r);
-}
-
-template <typename ExpectedPixelType, typename ObservedPixelType>
-bool check_result(ExpectedPixelType expected_pixel,
-                  ObservedPixelType observed_pixel,
-                  const char*       label,
-                  int               row,
-                  int               column,
-                  bool              logIncorrect = false,
-                  bool              logCorrect = false) {
-    typedef typename pixel_promotion<ExpectedPixelType,ObservedPixelType>::promotion_type promotion_type;
-
-    auto expected = pixel_traits<promotion_type>::translate(expected_pixel);
-    auto observed = pixel_traits<promotion_type>::translate(observed_pixel);
-
-    auto t_expected = pixel_traits<float4>::translate(expected);
-    auto t_observed = pixel_traits<float4>::translate(observed);
-
-    const bool pixel_is_correct = pixel_compare(observed, expected);
-    if (pixel_is_correct) {
-        if (logCorrect) {
-            LOGE("%s:  CORRECT pixel{row:%d, col%d}", label, row, column);
+    template<>
+    struct pixel_comparator<float> {
+        static bool is_equal(float l, float r) {
+            const int ulp = 2;
+            return almost_equal(l, r, ulp);
         }
-    }
-    else {
-        if (logIncorrect) {
-            const float4 log_expected = pixel_traits<float4>::translate(expected_pixel);
-            const float4 log_observed = pixel_traits<float4>::translate(observed_pixel);
+    };
 
-            LOGE("%s: INCORRECT pixel{row:%d, col%d} expected{x=%f, y=%f, z=%f, w=%f} observed{x=%f, y=%f, z=%f, w=%f}",
-                 label, row, column,
-                 log_expected.x, log_expected.y, log_expected.z, log_expected.w,
-                 log_observed.x, log_observed.y, log_observed.z, log_observed.w);
+    template<>
+    struct pixel_comparator<half> {
+        static bool is_equal(half l, half r) {
+            const int ulp = 2;
+            return almost_equal(l, r, ulp);
         }
+    };
+
+    template<>
+    struct pixel_comparator<uchar> {
+        static bool is_equal(uchar l, uchar r) {
+            return pixel_comparator<float>::is_equal(pixel_traits<float>::translate(l),
+                                                     pixel_traits<float>::translate(r));
+        }
+    };
+
+    template<typename T>
+    struct pixel_comparator<vec2<T> > {
+        static bool is_equal(const vec2<T> &l, const vec2<T> &r) {
+            return pixel_comparator<T>::is_equal(l.x, r.x)
+                   && pixel_comparator<T>::is_equal(l.y, r.y);
+        }
+    };
+
+    template<typename T>
+    struct pixel_comparator<vec4<T> > {
+        static bool is_equal(const vec4<T> &l, const vec4<T> &r) {
+            return pixel_comparator<T>::is_equal(l.x, r.x)
+                   && pixel_comparator<T>::is_equal(l.y, r.y)
+                   && pixel_comparator<T>::is_equal(l.z, r.z)
+                   && pixel_comparator<T>::is_equal(l.w, r.w);
+        }
+    };
+
+    template<typename T>
+    bool pixel_compare(const T &l, const T &r) {
+        return pixel_comparator<T>::is_equal(l, r);
     }
 
-    return pixel_is_correct;
-}
+    template<typename ExpectedPixelType, typename ObservedPixelType>
+    bool check_result(ExpectedPixelType expected_pixel,
+                      ObservedPixelType observed_pixel,
+                      const char *label,
+                      int row,
+                      int column,
+                      bool logIncorrect = false,
+                      bool logCorrect = false) {
+        typedef typename pixel_promotion<ExpectedPixelType, ObservedPixelType>::promotion_type promotion_type;
 
-template <typename ObservedPixelType, typename ExpectedPixelType>
-bool check_results(const ObservedPixelType* observed_pixels,
-                   int                      width,
-                   int                      height,
-                   int                      pitch,
-                   ExpectedPixelType        expected,
-                   const char*              label,
-                   bool                     logIncorrect = false,
-                   bool                     logCorrect = false) {
-    unsigned int num_correct_pixels = 0;
-    unsigned int num_incorrect_pixels = 0;
+        auto expected = pixel_traits<promotion_type>::translate(expected_pixel);
+        auto observed = pixel_traits<promotion_type>::translate(observed_pixel);
 
-    auto row = observed_pixels;
-    for (int r = 0; r < height; ++r, row += pitch) {
-        auto p = row;
-        for (int c = 0; c < width; ++c, ++p) {
-            if (check_result(expected, *p, label, r, c, logIncorrect, logCorrect)) {
-                ++num_correct_pixels;
+        auto t_expected = pixel_traits<float4>::translate(expected);
+        auto t_observed = pixel_traits<float4>::translate(observed);
+
+        const bool pixel_is_correct = pixel_compare(observed, expected);
+        if (pixel_is_correct) {
+            if (logCorrect) {
+                LOGE("%s:  CORRECT pixel{row:%d, col%d}", label, row, column);
             }
-            else {
-                ++num_incorrect_pixels;
+        } else {
+            if (logIncorrect) {
+                const float4 log_expected = pixel_traits<float4>::translate(expected_pixel);
+                const float4 log_observed = pixel_traits<float4>::translate(observed_pixel);
+
+                LOGE("%s: INCORRECT pixel{row:%d, col%d} expected{x=%f, y=%f, z=%f, w=%f} observed{x=%f, y=%f, z=%f, w=%f}",
+                     label, row, column,
+                     log_expected.x, log_expected.y, log_expected.z, log_expected.w,
+                     log_observed.x, log_observed.y, log_observed.z, log_observed.w);
             }
         }
+
+        return pixel_is_correct;
     }
 
-    LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels, num_incorrect_pixels);
+    template<typename ObservedPixelType, typename ExpectedPixelType>
+    bool check_results(const ObservedPixelType *observed_pixels,
+                       int width,
+                       int height,
+                       int pitch,
+                       ExpectedPixelType expected,
+                       const char *label,
+                       bool logIncorrect = false,
+                       bool logCorrect = false) {
+        unsigned int num_correct_pixels = 0;
+        unsigned int num_incorrect_pixels = 0;
 
-    return (0 == num_incorrect_pixels && 0 < num_correct_pixels);
-}
-
-template <typename ExpectedPixelType, typename ObservedPixelType>
-bool check_results(const ExpectedPixelType* expected_pixels,
-                   const ObservedPixelType* observed_pixels,
-                   int                      width,
-                   int                      height,
-                   int                      pitch,
-                   const char*              label,
-                   bool                     logIncorrect = false,
-                   bool                     logCorrect = false) {
-    unsigned int num_correct_pixels = 0;
-    unsigned int num_incorrect_pixels = 0;
-
-    auto expected_row = expected_pixels;
-    auto observed_row = observed_pixels;
-    for (int r = 0; r < height; ++r, expected_row += pitch, observed_row += pitch) {
-        auto expected_p = expected_row;
-        auto observed_p = observed_row;
-        for (int c = 0; c < width; ++c, ++expected_p, ++observed_p) {
-            if (check_result(*expected_p, *observed_p, label, r, c, logIncorrect, logCorrect)) {
-                ++num_correct_pixels;
-            }
-            else {
-                ++num_incorrect_pixels;
+        auto row = observed_pixels;
+        for (int r = 0; r < height; ++r, row += pitch) {
+            auto p = row;
+            for (int c = 0; c < width; ++c, ++p) {
+                if (check_result(expected, *p, label, r, c, logIncorrect, logCorrect)) {
+                    ++num_correct_pixels;
+                } else {
+                    ++num_incorrect_pixels;
+                }
             }
         }
+
+        LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels,
+             num_incorrect_pixels);
+
+        return (0 == num_incorrect_pixels && 0 < num_correct_pixels);
     }
 
-    LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels, num_incorrect_pixels);
+    template<typename ExpectedPixelType, typename ObservedPixelType>
+    bool check_results(const ExpectedPixelType *expected_pixels,
+                       const ObservedPixelType *observed_pixels,
+                       int width,
+                       int height,
+                       int pitch,
+                       const char *label,
+                       bool logIncorrect = false,
+                       bool logCorrect = false) {
+        unsigned int num_correct_pixels = 0;
+        unsigned int num_incorrect_pixels = 0;
 
-    return (0 == num_incorrect_pixels && 0 < num_correct_pixels);
-}
+        auto expected_row = expected_pixels;
+        auto observed_row = observed_pixels;
+        for (int r = 0; r < height; ++r, expected_row += pitch, observed_row += pitch) {
+            auto expected_p = expected_row;
+            auto observed_p = observed_row;
+            for (int c = 0; c < width; ++c, ++expected_p, ++observed_p) {
+                if (check_result(*expected_p, *observed_p, label, r, c, logIncorrect, logCorrect)) {
+                    ++num_correct_pixels;
+                } else {
+                    ++num_incorrect_pixels;
+                }
+            }
+        }
 
-template <typename ExpectedPixelType, typename ObservedPixelType>
-bool check_results(const vulkan_utils::device_memory& expected,
-                   const vulkan_utils::device_memory& observed,
-                   int                  width,
-                   int                  height,
-                   int                  pitch,
-                   const char*          label,
-                   bool                 logIncorrect = false,
-                   bool                 logCorrect = false) {
-    vulkan_utils::memory_map src_map(expected);
-    vulkan_utils::memory_map dst_map(observed);
-    auto src_pixels = static_cast<const ExpectedPixelType*>(src_map.data);
-    auto dst_pixels = static_cast<const ObservedPixelType*>(dst_map.data);
+        LOGE("%s: Correct pixels=%d; Incorrect pixels=%d", label, num_correct_pixels,
+             num_incorrect_pixels);
 
-    return check_results(src_pixels, dst_pixels, width, height, pitch, label, logIncorrect, logCorrect);
-}
+        return (0 == num_incorrect_pixels && 0 < num_correct_pixels);
+    }
 
-template <typename ObservedPixelType>
-bool check_results(const vulkan_utils::device_memory& observed,
-                   int                  width,
-                   int                  height,
-                   int                  pitch,
-                   const float4&        expected,
-                   const char*          label,
-                   bool                 logIncorrect = false,
-                   bool                 logCorrect = false) {
-    vulkan_utils::memory_map map(observed);
-    auto pixels = static_cast<const ObservedPixelType*>(map.data);
-    return check_results(pixels, width, height, pitch, expected, label, logIncorrect, logCorrect);
-}
+    template<typename ExpectedPixelType, typename ObservedPixelType>
+    bool check_results(const vulkan_utils::device_memory &expected,
+                       const vulkan_utils::device_memory &observed,
+                       int width,
+                       int height,
+                       int pitch,
+                       const char *label,
+                       bool logIncorrect = false,
+                       bool logCorrect = false) {
+        vulkan_utils::memory_map src_map(expected);
+        vulkan_utils::memory_map dst_map(observed);
+        auto src_pixels = static_cast<const ExpectedPixelType *>(src_map.data);
+        auto dst_pixels = static_cast<const ObservedPixelType *>(dst_map.data);
+
+        return check_results(src_pixels, dst_pixels, width, height, pitch, label, logIncorrect,
+                             logCorrect);
+    }
+
+    template<typename Fn>
+    Results runInExceptionContext(const std::string& label, const std::string& stage, Fn f) {
+        Results result = no_result;
+
+        try {
+            result = f();
+        }
+        catch(const vulkan_utils::error& e) {
+            LOGE("%s/%s: Vulkan error (%s, VkResult=%d)",
+                 label.c_str(), stage.c_str(),
+                 e.what(), e.get_result());
+            result = failure;
+        }
+        catch(const std::exception& e) {
+            LOGE("%s/%s: unkonwn error (%s)", label.c_str(), stage.c_str(), e.what());
+            result = failure;
+        }
+        catch(...) {
+            LOGE("%s/%s: unknown error", label.c_str(), stage.c_str());
+            result = failure;
+        }
+
+        return result;
+    }
+
+    template<typename ObservedPixelType>
+    bool check_results(const vulkan_utils::device_memory &observed,
+                       int width,
+                       int height,
+                       int pitch,
+                       const float4 &expected,
+                       const char *label,
+                       bool logIncorrect = false,
+                       bool logCorrect = false) {
+        vulkan_utils::memory_map map(observed);
+        auto pixels = static_cast<const ObservedPixelType *>(map.data);
+        return check_results(pixels, width, height, pitch, expected, label, logIncorrect,
+                             logCorrect);
+    }
+
+    Results test_kernel(const clspv_utils::kernel_module&   module,
+                        const std::string&                  entryPoint,
+                        const sample_info&                  info,
+                        const std::vector<VkSampler>&       samplers,
+                        bool                                logIncorrect = false,
+                        bool                                logCorrect = false) {
+        return runInExceptionContext(module.getName() + "/" + entryPoint,
+                                     "compiling kernel",
+                                     [&info, &module, &entryPoint]() {
+                                         Results results = no_result;
+
+                                         // TODO lookup workgroup count per module/kernel tuple
+                                         const auto num_workgroups = clspv_utils::WorkgroupDimensions(
+                                                 1, 1);
+
+                                         clspv_utils::kernel kernel(info.device, module,
+                                                                    entryPoint, num_workgroups);
+                                         results += success;
+                                         // TODO lookup test entry for the kernel
+
+                                         return results;
+                                     });
+    }
+
+    Results test_module(const std::string&              moduleName,
+                        const sample_info&              info,
+                        const std::vector<VkSampler>&   samplers,
+                        bool                            logIncorrect = false,
+                        bool                            logCorrect = false) {
+        return runInExceptionContext(moduleName, "loading module", [&]() {
+            Results result = no_result;
+
+            clspv_utils::kernel_module module(info.device, info.desc_pool, moduleName);
+            result += success;
+
+            std::vector<std::string> entryPoints(module.getEntryPoints());
+            for (auto ep : entryPoints) {
+                result += test_kernel(module, ep, info, samplers, logIncorrect, logCorrect);
+            }
+
+            return result;
+        });
+    }
+} // namespace test_utils
 
 /* ============================================================================================== */
 
-std::pair<int,int> test_localsize_kernel(const sample_info&             info,
+test_utils::Results test_localsize_kernel(const sample_info&             info,
                                          const std::vector<VkSampler>&  samplers,
                                          bool                           logIncorrect = false,
                                          bool                           logCorrect = false) {
@@ -2390,11 +2495,73 @@ std::pair<int,int> test_localsize_kernel(const sample_info&             info,
 
     LOGE("%s: %s", label.c_str(), (success ? "Correct" : "Incorrect"));
 
-    return (success ? std::make_pair(1, 0) : std::make_pair(0, 1));
+    return (success ? test_utils::success : std::make_pair(0, 1));
 };
 
+namespace localsize_tests {
+    test_utils::Results test_readlocalsize(const clspv_utils::kernel_module& module,
+                                           const clspv_utils::kernel&        kernel,
+                                           const sample_info&                info,
+                                           const std::vector<VkSampler>&     samplers,
+                                           bool                              logIncorrect = false,
+                                           bool                              logCorrect = false) {
+        std::string label = "localsize.spv/ReadLocalSizes/";
+        const clspv_utils::WorkgroupDimensions expected = std::make_pair(15, 23);
+
+        struct scalar_args {
+            int outWorkgroupX;  // offset 0
+            int outWorkgroupY;  // offset 4
+            int outWorkgroupZ;  // offset 8
+        };
+        static_assert(0 == offsetof(scalar_args, outWorkgroupX), "outWorkgroupX offset incorrect");
+        static_assert(4 == offsetof(scalar_args, outWorkgroupY), "outWorkgroupY offset incorrect");
+        static_assert(8 == offsetof(scalar_args, outWorkgroupZ), "outWorkgroupZ offset incorrect");
+
+        vulkan_utils::buffer outArgs(info, sizeof(scalar_args));
+
+        // The localsize kernel needs only a single workgroup with a single workitem
+        const auto num_workgroups = std::make_tuple(1, 1);
+
+        clspv_utils::kernel_invocation invocation(info.device, info.cmd_pool, info.memory_properties);
+
+        invocation.addBufferArgument(outArgs.buf);
+
+        invocation.run(info.graphics_queue, module, kernel, num_workgroups);
+
+        vulkan_utils::memory_map argMap(outArgs);
+        auto outScalars = static_cast<const scalar_args*>(argMap.data);
+
+        const auto observed = std::make_tuple(outScalars->outWorkgroupX,
+                                            outScalars->outWorkgroupY,
+                                            outScalars->outWorkgroupZ);
+
+        const bool success = (std::get<0>(expected) == std::get<0>(observed) &&
+                              std::get<1>(expected) == std::get<1>(observed) &&
+                              1 == std::get<2>(observed));
+        if (success) {
+            if (logCorrect) {
+                LOGE("%s:  CORRECT workgroup_size{x:%d, y:%d, z:%d}", label.c_str(),
+                     std::get<0>(observed), std::get<1>(observed), std::get<2>(observed));
+            }
+        }
+        else {
+            if (logIncorrect) {
+                LOGE("%s: INCORRECT workgroup_size expected{x=%d, y=%d, z=1} observed{x=%d, y=%d, z=%d}",
+                     label.c_str(),
+                     std::get<0>(expected), std::get<1>(expected),
+                     std::get<0>(observed), std::get<1>(observed), std::get<2>(observed));
+            }
+        }
+
+        LOGE("%s: %s", label.c_str(), (success ? "Correct" : "Incorrect"));
+
+        return (success ? std::make_pair(1, 0) : std::make_pair(0, 1));
+    };
+} // namespace localsize_tests
+
+
 template <typename PixelType>
-std::pair<int,int> test_fill_kernel(const sample_info&            info,
+test_utils::Results test_fill_kernel(const sample_info&            info,
                                     const std::vector<VkSampler>& samplers,
                                     bool                          logIncorrect = false,
                                     bool                          logCorrect = false) {
@@ -2428,7 +2595,7 @@ std::pair<int,int> test_fill_kernel(const sample_info&            info,
                     buffer_width, buffer_height, // width, height
                     color); // color
 
-    const bool success = check_results<PixelType>(dst_buffer.mem,
+    const bool success = test_utils::check_results<PixelType>(dst_buffer.mem,
                                                   buffer_width, buffer_height,
                                                   buffer_width,
                                                   color,
@@ -2438,13 +2605,13 @@ std::pair<int,int> test_fill_kernel(const sample_info&            info,
 
     dst_buffer.reset();
 
-    return (success ? std::make_pair(1, 0) : std::make_pair(0, 1));
+    return (success ? test_utils::success : std::make_pair(0, 1));
 }
 
 /* ============================================================================================== */
 
 template <typename BufferPixelType, typename ImagePixelType>
-std::pair<int,int> test_copytoimage_kernel(const sample_info&            info,
+test_utils::Results test_copytoimage_kernel(const sample_info&            info,
                                            const std::vector<VkSampler>& samplers,
                                            bool                          logIncorrect = false,
                                            bool                          logCorrect = false) {
@@ -2492,7 +2659,7 @@ std::pair<int,int> test_copytoimage_kernel(const sample_info&            info,
                                  buffer_width,
                                  buffer_height);
 
-    const bool success = check_results<BufferPixelType, ImagePixelType>(src_buffer.mem, dstImage.mem,
+    const bool success = test_utils::check_results<BufferPixelType, ImagePixelType>(src_buffer.mem, dstImage.mem,
                                                                         buffer_width, buffer_height,
                                                                         buffer_height,
                                                                         testLabel.c_str(),
@@ -2502,13 +2669,13 @@ std::pair<int,int> test_copytoimage_kernel(const sample_info&            info,
     dstImage.reset();
     src_buffer.reset();
 
-    return (success ? std::make_pair(1, 0) : std::make_pair(0, 1));
+    return (success ? test_utils::success : std::make_pair(0, 1));
 }
 
 /* ============================================================================================== */
 
 template <typename BufferPixelType, typename ImagePixelType>
-std::pair<int,int> test_copyfromimage_kernel(const sample_info&            info,
+test_utils::Results test_copyfromimage_kernel(const sample_info&            info,
                                              const std::vector<VkSampler>& samplers,
                                              bool                          logIncorrect = false,
                                              bool                          logCorrect = false) {
@@ -2555,7 +2722,7 @@ std::pair<int,int> test_copyfromimage_kernel(const sample_info&            info,
                                  buffer_width,
                                  buffer_height);
 
-    const bool success = check_results<ImagePixelType, BufferPixelType>(srcImage.mem, dst_buffer.mem,
+    const bool success = test_utils::check_results<ImagePixelType, BufferPixelType>(srcImage.mem, dst_buffer.mem,
                                                                         buffer_width, buffer_height,
                                                                         buffer_height,
                                                                         testLabel.c_str(),
@@ -2565,19 +2732,19 @@ std::pair<int,int> test_copyfromimage_kernel(const sample_info&            info,
     srcImage.reset();
     dst_buffer.reset();
 
-    return (success ? std::make_pair(1, 0) : std::make_pair(0, 1));
+    return (success ? test_utils::success : test_utils::failure);
 }
 
 /* ============================================================================================== */
 
 struct test_t {
-    typedef std::pair<int,int> (*fn)(const sample_info&, const std::vector<VkSampler>&, bool, bool);
+    typedef test_utils::Results (*fn)(const sample_info&, const std::vector<VkSampler>&, bool, bool);
 
     fn          func;
     std::string label;
 };
 
-std::pair<int,int> test_series(const test_t*                    first,
+test_utils::Results test_series(const test_t*                    first,
                                const test_t*                    last,
                                const sample_info&               info,
                                const std::vector<VkSampler>&    samplers,
@@ -2592,12 +2759,12 @@ std::pair<int,int> test_series(const test_t*                    first,
         catch(const vulkan_utils::error& ve) {
             // exceptions thrown during a test are counted as failures
             LOGE("%s: Exception %s: VkResult=%d", first->label.c_str(), ve.what(), ve.get_result());
-            results += std::make_pair(0, 1);
+            results += test_utils::failure;
         }
         catch(const std::exception& e) {
             // exceptions thrown during a test are counted as failures
             LOGE("%s: Exception %s", first->label.c_str(), e.what());
-            results += std::make_pair(0, 1);
+            results += test_utils::failure;
         }
     }
 
@@ -2605,7 +2772,7 @@ std::pair<int,int> test_series(const test_t*                    first,
 };
 
 template <typename ImagePixelType>
-std::pair<int,int> test_copytoimage_series(const sample_info&            info,
+test_utils::Results test_copytoimage_series(const sample_info&            info,
                                            const std::vector<VkSampler>& samplers,
                                            bool                          logIncorrect = false,
                                            bool                          logCorrect = false) {
@@ -2626,7 +2793,7 @@ std::pair<int,int> test_copytoimage_series(const sample_info&            info,
 }
 
 template <typename ImagePixelType>
-std::pair<int,int> test_copyfromimage_series(const sample_info&            info,
+test_utils::Results test_copyfromimage_series(const sample_info&            info,
                                              const std::vector<VkSampler>& samplers,
                                              bool                          logIncorrect = false,
                                              bool                          logCorrect = false) {
@@ -2684,6 +2851,10 @@ int sample_main(int argc, char *argv[]) {
                    std::back_inserter(samplers),
                    std::bind(create_compatible_sampler, info.device, std::placeholders::_1));
 
+    auto loadResults = test_utils::test_module("localsize", info, samplers, false, false);
+    loadResults += test_utils::test_module("fills", info, samplers, false, false);
+    loadResults += test_utils::test_module("memory", info, samplers, false, false);
+
     const test_t tests[] = {
             { test_localsize_kernel, "test_localsize_kernel" },
             { test_fill_kernel<float4>, "test_fill_kernel<float4>" },
@@ -2728,7 +2899,9 @@ int sample_main(int argc, char *argv[]) {
     destroy_device(info);
     destroy_instance(info);
 
-    LOGI("Complete! %d tests passed. %d tests failed", test_results.first, test_results.second);
+    LOGI("Complete! %d tests passed. %d tests failed",
+         test_utils::count_successes(test_results),
+         test_utils::count_failures(test_results));
 
     return 0;
 }
