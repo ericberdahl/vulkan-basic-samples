@@ -1467,8 +1467,8 @@ struct pixel_traits<float> {
     static constexpr const int num_components = 1;
     static constexpr const char* const type_name = "float";
 
-    static const int cl_pixel_order = CL_R;
-    static const int cl_pixel_type = CL_FLOAT;
+    static const cl_channel_order cl_pixel_order = CL_R;
+    static const cl_channel_type cl_pixel_type = CL_FLOAT;
     static const VkFormat vk_pixel_type = VK_FORMAT_R32_SFLOAT;
 
     static float translate(const float& pixel) { return pixel; }
@@ -1499,8 +1499,8 @@ struct pixel_traits<float2> {
     static constexpr const int num_components = 2;
     static constexpr const char* const type_name = "float2";
 
-    static const int cl_pixel_order = CL_RG;
-    static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
+    static const cl_channel_order cl_pixel_order = CL_RG;
+    static const cl_channel_type cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static const VkFormat vk_pixel_type = VK_FORMAT_R32G32_SFLOAT;
 
     template <typename T>
@@ -1533,8 +1533,8 @@ struct pixel_traits<float4> {
     static constexpr const char* const type_name = "float4";
 
     static const int device_pixel_format = 1; // kDevicePixelFormat_BGRA_4444_32f
-    static const int cl_pixel_order = CL_RGBA;
-    static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
+    static const cl_channel_order cl_pixel_order = CL_RGBA;
+    static const cl_channel_type cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static const VkFormat vk_pixel_type = VK_FORMAT_R32G32B32A32_SFLOAT;
 
     template <typename T>
@@ -1575,8 +1575,8 @@ struct pixel_traits<half> {
     static constexpr const int num_components = 1;
     static constexpr const char* const type_name = "half";
 
-    static const int cl_pixel_order = CL_R;
-    static const int cl_pixel_type = CL_HALF_FLOAT;
+    static const cl_channel_order cl_pixel_order = CL_R;
+    static const cl_channel_type cl_pixel_type = CL_HALF_FLOAT;
     static const VkFormat vk_pixel_type = VK_FORMAT_R16_SFLOAT;
 
     static half translate(float pixel) { return half(pixel); }
@@ -1605,8 +1605,8 @@ struct pixel_traits<half2> {
     static constexpr const int num_components = 2;
     static constexpr const char* const type_name = "half2";
 
-    static const int cl_pixel_order = CL_RG;
-    static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
+    static const cl_channel_order cl_pixel_order = CL_RG;
+    static const cl_channel_type cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static const VkFormat vk_pixel_type = VK_FORMAT_R16G16_SFLOAT;
 
     template <typename T>
@@ -1639,8 +1639,8 @@ struct pixel_traits<half4> {
     static constexpr const char* const type_name = "half4";
 
     static const int device_pixel_format = 0; // kDevicePixelFormat_BGRA_4444_16f
-    static const int cl_pixel_order = CL_RGBA;
-    static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
+    static const cl_channel_order cl_pixel_order = CL_RGBA;
+    static const cl_channel_type cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static const VkFormat vk_pixel_type = VK_FORMAT_R16G16B16A16_SFLOAT;
 
     template <typename T>
@@ -1681,8 +1681,8 @@ struct pixel_traits<ushort> {
     static constexpr const int num_components = 1;
     static constexpr const char* const type_name = "ushort";
 
-    static const int cl_pixel_order = CL_R;
-    static const int cl_pixel_type = CL_UNSIGNED_INT16;
+    static const cl_channel_order cl_pixel_order = CL_R;
+    static const cl_channel_type cl_pixel_type = CL_UNSIGNED_INT16;
     static const VkFormat vk_pixel_type = VK_FORMAT_R16_UINT;
 
     static ushort translate(float pixel) {
@@ -1709,8 +1709,8 @@ struct pixel_traits<ushort2> {
     static constexpr const int num_components = 2;
     static constexpr const char* const type_name = "ushort2";
 
-    static const int cl_pixel_order = CL_RG;
-    static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
+    static const cl_channel_order cl_pixel_order = CL_RG;
+    static const cl_channel_type cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static const VkFormat vk_pixel_type = VK_FORMAT_R16G16_UINT;
 
     template <typename T>
@@ -1742,8 +1742,8 @@ struct pixel_traits<ushort4> {
     static constexpr const int num_components = 4;
     static constexpr const char* const type_name = "ushort4";
 
-    static const int cl_pixel_order = CL_RGBA;
-    static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
+    static const cl_channel_order cl_pixel_order = CL_RGBA;
+    static const cl_channel_type cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static const VkFormat vk_pixel_type = VK_FORMAT_R16G16B16A16_UINT;
 
     template <typename T>
@@ -1784,8 +1784,8 @@ struct pixel_traits<uchar> {
     static constexpr const int num_components = 1;
     static constexpr const char* const type_name = "uchar";
 
-    static const int cl_pixel_order = CL_R;
-    static const int cl_pixel_type = CL_UNORM_INT8;
+    static const cl_channel_order cl_pixel_order = CL_R;
+    static const cl_channel_type cl_pixel_type = CL_UNORM_INT8;
     static const VkFormat vk_pixel_type = VK_FORMAT_R8_UNORM;
 
     static uchar translate(float pixel) {
@@ -1816,8 +1816,8 @@ struct pixel_traits<uchar2> {
     static constexpr const int num_components = 2;
     static constexpr const char* const type_name = "uchar2";
 
-    static const int cl_pixel_order = CL_RG;
-    static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
+    static const cl_channel_order cl_pixel_order = CL_RG;
+    static const cl_channel_type cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static const VkFormat vk_pixel_type = VK_FORMAT_R8G8_UNORM;
 
     template <typename T>
@@ -1849,8 +1849,8 @@ struct pixel_traits<uchar4> {
     static constexpr const int num_components = 4;
     static constexpr const char* const type_name = "uchar4";
 
-    static const int cl_pixel_order = CL_RGBA;
-    static const int cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
+    static const cl_channel_order cl_pixel_order = CL_RGBA;
+    static const cl_channel_type cl_pixel_type = pixel_traits<component_t>::cl_pixel_type;
     static const VkFormat vk_pixel_type = VK_FORMAT_R8G8B8A8_UNORM;
 
     template <typename T>
@@ -1995,16 +1995,18 @@ VkSampler create_compatible_sampler(VkDevice device, int opencl_flags) {
 
 /* ============================================================================================== */
 
-void run_fill_kernel(const sample_info&             info,
-                     const std::vector<VkSampler>&  samplers,
-                     VkBuffer                       dst_buffer,
-                     int                            pitch,
-                     int                            device_format,
-                     int                            offset_x,
-                     int                            offset_y,
-                     int                            width,
-                     int                            height,
-                     const float4&                  color) {
+void invoke_fill_kernel(const clspv_utils::kernel_module&   module,
+                        const clspv_utils::kernel&          kernel,
+                        const sample_info&                  info,
+                        const std::vector<VkSampler>&       samplers,
+                        VkBuffer                            dst_buffer,
+                        int                                 pitch,
+                        int                                 device_format,
+                        int                                 offset_x,
+                        int                                 offset_y,
+                        int                                 width,
+                        int                                 height,
+                        const float4&                       color) {
     struct scalar_args {
         int     inPitch;        // offset 0
         int     inDeviceFormat; // DevicePixelFormat offset 4
@@ -2032,29 +2034,46 @@ void run_fill_kernel(const sample_info&             info,
             color
     };
 
-    const clspv_utils::WorkgroupDimensions workgroup_sizes(32, 32);
+    const clspv_utils::WorkgroupDimensions workgroup_sizes = kernel.getWorkgroupSize();
     const clspv_utils::WorkgroupDimensions num_workgroups(
             (scalars.inWidth + workgroup_sizes.x - 1) / workgroup_sizes.x,
             (scalars.inHeight + workgroup_sizes.y - 1) / workgroup_sizes.y);
 
-    clspv_utils::kernel_module     module(info.device, info.desc_pool, "Fills");
-    clspv_utils::kernel            kern(info.device, module, "FillWithColorKernel", workgroup_sizes);
     clspv_utils::kernel_invocation invocation(info.device, info.cmd_pool, info.memory_properties);
 
     invocation.addLiteralSamplers(samplers.begin(), samplers.end());
     invocation.addBufferArgument(dst_buffer);
     invocation.addPodArgument(scalars);
-    invocation.run(info.graphics_queue, module, kern, num_workgroups);
+    invocation.run(info.graphics_queue, module, kernel, num_workgroups);
 }
 
-void run_copybuffertoimage_kernel(const sample_info& info,
+void run_fill_kernel(const sample_info&             info,
+                     const std::vector<VkSampler>&  samplers,
+                     VkBuffer                       dst_buffer,
+                     int                            pitch,
+                     int                            device_format,
+                     int                            offset_x,
+                     int                            offset_y,
+                     int                            width,
+                     int                            height,
+                     const float4&                  color) {
+    const clspv_utils::WorkgroupDimensions workgroup_sizes(32, 32);
+
+    clspv_utils::kernel_module     module(info.device, info.desc_pool, "Fills");
+    clspv_utils::kernel            kernel(info.device, module, "FillWithColorKernel", workgroup_sizes);
+    return invoke_fill_kernel(module, kernel, info, samplers, dst_buffer, pitch, device_format, offset_x, offset_y, width, height, color);
+}
+
+void invoke_copybuffertoimage_kernel(const clspv_utils::kernel_module&   module,
+                                     const clspv_utils::kernel&          kernel,
+                                     const sample_info& info,
                                   const std::vector<VkSampler>& samplers,
                                   VkBuffer  src_buffer,
                                   VkImageView   dst_image,
                                   int src_offset,
                                   int src_pitch,
-                                  int src_channel_order,
-                                  int src_channel_type,
+                                     cl_channel_order src_channel_order,
+                                     cl_channel_type src_channel_type,
                                   bool swap_components,
                                   bool premultiply,
                                   int width,
@@ -2089,13 +2108,11 @@ void run_copybuffertoimage_kernel(const sample_info& info,
             height
     };
 
-    const clspv_utils::WorkgroupDimensions workgroup_sizes(32, 32);
+    const clspv_utils::WorkgroupDimensions workgroup_sizes = kernel.getWorkgroupSize();
     const clspv_utils::WorkgroupDimensions num_workgroups(
             (width + workgroup_sizes.x - 1) / workgroup_sizes.x,
             (height + workgroup_sizes.y - 1) / workgroup_sizes.y);
 
-    clspv_utils::kernel_module     module(info.device, info.desc_pool, "Memory");
-    clspv_utils::kernel            kern(info.device, module, "CopyBufferToImageKernel", workgroup_sizes);
     clspv_utils::kernel_invocation invocation(info.device, info.cmd_pool, info.memory_properties);
 
     invocation.addLiteralSamplers(samplers.begin(), samplers.end());
@@ -2103,17 +2120,44 @@ void run_copybuffertoimage_kernel(const sample_info& info,
     invocation.addWriteOnlyImageArgument(dst_image);
     invocation.addPodArgument(scalars);
 
-    invocation.run(info.graphics_queue, module, kern, num_workgroups);
+    invocation.run(info.graphics_queue, module, kernel, num_workgroups);
 }
 
-void run_copyimagetobuffer_kernel(const sample_info& info,
+void run_copybuffertoimage_kernel(const sample_info& info,
+                                  const std::vector<VkSampler>& samplers,
+                                  VkBuffer  src_buffer,
+                                  VkImageView   dst_image,
+                                  int src_offset,
+                                  int src_pitch,
+                                  cl_channel_order src_channel_order,
+                                  cl_channel_type src_channel_type,
+                                  bool swap_components,
+                                  bool premultiply,
+                                  int width,
+                                  int height) {
+    const clspv_utils::WorkgroupDimensions workgroup_sizes(32, 32);
+
+    clspv_utils::kernel_module     module(info.device, info.desc_pool, "Memory");
+    clspv_utils::kernel            kernel(info.device, module, "CopyBufferToImageKernel", workgroup_sizes);
+    invoke_copybuffertoimage_kernel(module, kernel, info, samplers,
+                                    src_buffer, dst_image,
+                                    src_offset, src_pitch,
+                                    src_channel_order, src_channel_type,
+                                    swap_components,
+                                    premultiply,
+                                    width, height);
+}
+
+void invoke_copyimagetobuffer_kernel(const clspv_utils::kernel_module&   module,
+                                     const clspv_utils::kernel&          kernel,
+                                     const sample_info& info,
                                   const std::vector<VkSampler>& samplers,
                                   VkImageView src_image,
                                   VkBuffer dst_buffer,
                                   int dst_offset,
                                   int dst_pitch,
-                                  int dst_channel_order,
-                                  int dst_channel_type,
+                                     cl_channel_order dst_channel_order,
+                                     cl_channel_type dst_channel_type,
                                   bool swap_components,
                                   int width,
                                   int height) {
@@ -2144,13 +2188,11 @@ void run_copyimagetobuffer_kernel(const sample_info& info,
             height
     };
 
-    const clspv_utils::WorkgroupDimensions workgroup_sizes(32, 32);
+    const clspv_utils::WorkgroupDimensions workgroup_sizes = kernel.getWorkgroupSize();
     const clspv_utils::WorkgroupDimensions num_workgroups(
             (width + workgroup_sizes.x - 1) / workgroup_sizes.x,
             (height + workgroup_sizes.y - 1) / workgroup_sizes.y);
 
-    clspv_utils::kernel_module     module(info.device, info.desc_pool, "Memory");
-    clspv_utils::kernel            kern(info.device, module, "CopyImageToBufferKernel", workgroup_sizes);
     clspv_utils::kernel_invocation invocation(info.device, info.cmd_pool, info.memory_properties);
 
     invocation.addLiteralSamplers(samplers.begin(), samplers.end());
@@ -2158,7 +2200,30 @@ void run_copyimagetobuffer_kernel(const sample_info& info,
     invocation.addBufferArgument(dst_buffer);
     invocation.addPodArgument(scalars);
 
-    invocation.run(info.graphics_queue, module, kern, num_workgroups);
+    invocation.run(info.graphics_queue, module, kernel, num_workgroups);
+}
+
+void run_copyimagetobuffer_kernel(const sample_info& info,
+                                  const std::vector<VkSampler>& samplers,
+                                  VkImageView src_image,
+                                  VkBuffer dst_buffer,
+                                  int dst_offset,
+                                  int dst_pitch,
+                                  cl_channel_order dst_channel_order,
+                                  cl_channel_type dst_channel_type,
+                                  bool swap_components,
+                                  int width,
+                                  int height) {
+    const clspv_utils::WorkgroupDimensions workgroup_sizes(32, 32);
+
+    clspv_utils::kernel_module     module(info.device, info.desc_pool, "Memory");
+    clspv_utils::kernel            kernel(info.device, module, "CopyImageToBufferKernel", workgroup_sizes);
+    invoke_copyimagetobuffer_kernel(module, kernel, info, samplers,
+                                    src_image, dst_buffer,
+                                    dst_offset, dst_pitch,
+                                    dst_channel_order, dst_channel_type,
+                                    swap_components,
+                                    width, height);
 }
 
 std::tuple<int,int,int> invoke_localsize_kernel(const clspv_utils::kernel_module&   module,
@@ -2474,6 +2539,24 @@ namespace test_utils {
         return result;
     }
 
+    Results test_kernel_invocation(const clspv_utils::kernel_module&    module,
+                                   const clspv_utils::kernel&           kernel,
+                                   test_utils::test_kernel_fn*          first,
+                                   test_utils::test_kernel_fn*          last,
+                                   const sample_info&                   info,
+                                   const std::vector<VkSampler>&        samplers,
+                                   bool                                 logIncorrect = false,
+                                   bool                                 logCorrect = false) {
+        Results result = no_result;
+
+        for (; first != last; ++first) {
+            result += test_kernel_invocation(module, kernel, *first, info, samplers,
+                                             logIncorrect, logCorrect);
+        }
+
+        return result;
+    }
+
     Results test_kernel(const clspv_utils::kernel_module&       module,
                         const std::string&                      entryPoint,
                         test_utils::test_kernel_fn              testFn,
@@ -2573,9 +2656,9 @@ test_utils::Results test_readlocalsize(const clspv_utils::kernel_module& module,
 
 template <typename PixelType>
 test_utils::Results test_fill_kernel(const sample_info&            info,
-                                    const std::vector<VkSampler>& samplers,
-                                    bool                          logIncorrect = false,
-                                    bool                          logCorrect = false) {
+                                     const std::vector<VkSampler>& samplers,
+                                     bool                          logIncorrect = false,
+                                     bool                          logCorrect = false) {
     const std::string typeLabel = pixel_traits<PixelType>::type_name;
 
     std::string testLabel = "fills.spv/FillWithColorKernel/";
@@ -2622,7 +2705,7 @@ test_utils::Results test_fill_kernel(const sample_info&            info,
 /* ============================================================================================== */
 
 template <typename BufferPixelType, typename ImagePixelType>
-test_utils::Results test_copytoimage_kernel(const sample_info&            info,
+test_utils::Results test_copytoimage_kernel(const sample_info&           info,
                                            const std::vector<VkSampler>& samplers,
                                            bool                          logIncorrect = false,
                                            bool                          logCorrect = false) {
@@ -2772,8 +2855,20 @@ test_utils::Results test_series(const test_t*                    first,
     return results;
 };
 
+test_utils::Results test_fill_series(const sample_info&            info,
+                                     const std::vector<VkSampler>& samplers,
+                                     bool                          logIncorrect = false,
+                                     bool                          logCorrect = false) {
+    const test_t tests[] = {
+            { test_fill_kernel<float4>, "test_fill_kernel<float4>" },
+            { test_fill_kernel<half4>, "test_fill_kernel<half4>" },
+    };
+
+    return test_series(std::begin(tests), std::end(tests), info, samplers, logIncorrect, logCorrect);
+}
+
 template <typename ImagePixelType>
-test_utils::Results test_copytoimage_series(const sample_info&            info,
+test_utils::Results test_copytoimage_series(const sample_info&           info,
                                            const std::vector<VkSampler>& samplers,
                                            bool                          logIncorrect = false,
                                            bool                          logCorrect = false) {
@@ -2795,9 +2890,9 @@ test_utils::Results test_copytoimage_series(const sample_info&            info,
 
 template <typename ImagePixelType>
 test_utils::Results test_copyfromimage_series(const sample_info&            info,
-                                             const std::vector<VkSampler>& samplers,
-                                             bool                          logIncorrect = false,
-                                             bool                          logCorrect = false) {
+                                              const std::vector<VkSampler>& samplers,
+                                              bool                          logIncorrect = false,
+                                              bool                          logCorrect = false) {
     std::string labelEnd = pixel_traits<ImagePixelType>::type_name;
     labelEnd += ">";
 
@@ -2809,6 +2904,44 @@ test_utils::Results test_copyfromimage_series(const sample_info&            info
             { test_copyfromimage_kernel<float, ImagePixelType>, "test_copyfromimage_kernel<float, " + labelEnd },
             { test_copyfromimage_kernel<float2, ImagePixelType>, "test_copyfromimage_kernel<float2, " + labelEnd },
             { test_copyfromimage_kernel<float4, ImagePixelType>, "test_copyfromimage_kernel<float4, " + labelEnd }
+    };
+
+    return test_series(std::begin(tests), std::end(tests), info, samplers, logIncorrect, logCorrect);
+}
+
+test_utils::Results test_copytoimage_matrix(const sample_info&            info,
+                                            const std::vector<VkSampler>& samplers,
+                                            bool                          logIncorrect = false,
+                                            bool                          logCorrect = false) {
+    const test_t tests[] = {
+            { test_copytoimage_series<float4>, "test_copytoimage_series<float4>" },
+            { test_copytoimage_series<half4>, "test_copytoimage_series<half4>" },
+            { test_copytoimage_series<uchar4>, "test_copytoimage_series<uchar4>" },
+            { test_copytoimage_series<float2>, "test_copytoimage_series<float2>" },
+            { test_copytoimage_series<half2>, "test_copytoimage_series<half2>" },
+            { test_copytoimage_series<uchar2>, "test_copytoimage_series<uchar2>" },
+            { test_copytoimage_series<float>, "test_copytoimage_series<float>" },
+            { test_copytoimage_series<half>, "test_copytoimage_series<half>" },
+            { test_copytoimage_series<uchar>, "test_copytoimage_series<uchar>" },
+    };
+
+    return test_series(std::begin(tests), std::end(tests), info, samplers, logIncorrect, logCorrect);
+}
+
+test_utils::Results test_copyfromimage_matrix(const sample_info&            info,
+                                              const std::vector<VkSampler>& samplers,
+                                              bool                          logIncorrect = false,
+                                              bool                          logCorrect = false) {
+    const test_t tests[] = {
+            { test_copyfromimage_series<float4>, "test_copyfromimage_series<float4>" },
+            { test_copyfromimage_series<half4>, "test_copyfromimage_series<half4>" },
+            { test_copyfromimage_series<uchar4>, "test_copyfromimage_series<uchar4>" },
+            { test_copyfromimage_series<float2>, "test_copyfromimage_series<float2>" },
+            { test_copyfromimage_series<half2>, "test_copyfromimage_series<half2>" },
+            { test_copyfromimage_series<uchar2>, "test_copyfromimage_series<uchar2>" },
+            { test_copyfromimage_series<float>, "test_copyfromimage_series<float>" },
+            { test_copyfromimage_series<half>, "test_copyfromimage_series<half>" },
+            { test_copyfromimage_series<uchar>, "test_copyfromimage_series<uchar>" },
     };
 
     return test_series(std::begin(tests), std::end(tests), info, samplers, logIncorrect, logCorrect);
@@ -2881,29 +3014,9 @@ int sample_main(int argc, char *argv[]) {
     auto test_results = run_all_tests(info, samplers);
 
     const test_t tests[] = {
-            { test_fill_kernel<float4>, "test_fill_kernel<float4>" },
-            { test_fill_kernel<half4>, "test_fill_kernel<half4>" },
-
-            { test_copytoimage_series<float4>, "test_copytoimage_series<float4>" },
-            { test_copytoimage_series<half4>, "test_copytoimage_series<half4>" },
-            { test_copytoimage_series<uchar4>, "test_copytoimage_series<uchar4>" },
-
-            { test_copyfromimage_series<float4>, "test_copyfromimage_series<float4>" },
-            { test_copyfromimage_series<half4>, "test_copyfromimage_series<half4>" },
-            { test_copyfromimage_series<uchar4>, "test_copyfromimage_series<uchar4>" },
-
-            { test_copytoimage_series<float2>, "test_copytoimage_series<float2>" },
-            { test_copytoimage_series<half2>, "test_copytoimage_series<half2>" },
-            { test_copytoimage_series<uchar2>, "test_copytoimage_series<uchar2>" },
-            { test_copyfromimage_series<float2>, "test_copyfromimage_series<float2>" },
-            { test_copyfromimage_series<half2>, "test_copyfromimage_series<half2>" },
-            { test_copyfromimage_series<uchar2>, "test_copyfromimage_series<uchar2>" },
-            { test_copytoimage_series<float>, "test_copytoimage_series<float>" },
-            { test_copytoimage_series<half>, "test_copytoimage_series<half>" },
-            { test_copytoimage_series<uchar>, "test_copytoimage_series<uchar>" },
-            { test_copyfromimage_series<float>, "test_copyfromimage_series<float>" },
-            { test_copyfromimage_series<half>, "test_copyfromimage_series<half>" },
-            { test_copyfromimage_series<uchar>, "test_copyfromimage_series<uchar>" },
+            { test_fill_series, "test_fill_series" },
+            { test_copytoimage_matrix, "test_copytoimage_matrix" },
+            { test_copyfromimage_matrix, "test_copyfromimage_matrix" },
     };
 
     test_results += test_series(std::begin(tests), std::end(tests), info, samplers);
