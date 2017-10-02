@@ -2540,13 +2540,21 @@ namespace test_utils {
                                                      return ktm.entry == ep;
                                                  });
 
-                result += test_kernel(module,
-                                      ep,
-                                      epTest == kernelTests.end() ? nullptr : epTest->test,
-                                      epTest == kernelTests.end() ? clspv_utils::WorkgroupDimensions() : epTest->workgroupSize,
-                                      info,
-                                      samplers,
-                                      opts);
+                clspv_utils::WorkgroupDimensions num_workgroups;
+                if (epTest != kernelTests.end()) {
+                    num_workgroups = epTest->workgroupSize;
+                }
+
+                if (0 != num_workgroups.x || 0 != num_workgroups.y) {
+                    // WorkgroupDimensions(0, 0) is a sentinel to skip this kernel entirely
+                    result += test_kernel(module,
+                                          ep,
+                                          epTest == kernelTests.end() ? nullptr : epTest->test,
+                                          num_workgroups,
+                                          info,
+                                          samplers,
+                                          opts);
+                }
             }
 
             return result;
@@ -2877,20 +2885,23 @@ test_utils::Results test_copyfromimage_matrix(const clspv_utils::kernel_module& 
 
 const test_utils::module_test_bundle module_tests[] = {
         {
-                "localsize", {
-                                     { "ReadLocalSize", test_readlocalsize }
-                             }
+                "localsize",
+                {
+                        { "ReadLocalSize", test_readlocalsize }
+                }
         },
         {
-                "Fills", {
-                                 { "FillWithColorKernel", test_fill_series, { 32, 32 } }
-                         }
+                "Fills",
+                {
+                        { "FillWithColorKernel", test_fill_series, { 32, 32 } }
+                }
         },
         {
-                "Memory", {
-                                  { "CopyBufferToImageKernel", test_copytoimage_matrix, { 32, 32 } },
-                                  { "CopyImageToBufferKernel", test_copyfromimage_matrix, { 32, 32 } }
-                          }
+                "Memory",
+                {
+                        { "CopyBufferToImageKernel", test_copytoimage_matrix, { 32, 32 } },
+                        { "CopyImageToBufferKernel", test_copyfromimage_matrix, { 32, 32 } }
+                }
         },
 //        {   "Motion", {}    },
 //        {   "PixelFormatConvert_420", {}    },
@@ -2919,6 +2930,7 @@ int sample_main(int argc, char *argv[]) {
     init_global_layer_properties(info);
 
     info.instance_extension_names.push_back(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
+//    info.instance_layer_names.push_back("VK_LAYER_LUNARG_standard_validation");
     init_instance(info, "vulkansamples_device");
 
     init_enumerate_device(info);
