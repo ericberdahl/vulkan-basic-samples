@@ -395,9 +395,6 @@ namespace clspv_utils {
 
         ~kernel_module();
 
-        VkDescriptorSet getLiteralSamplersDescriptorSet() const;
-        VkDescriptorSet getKernelArgumentDescriptorSet(const std::string& entryPoint) const;
-
         std::string                 getName() const { return mName; }
         std::vector<std::string>    getEntryPoints() const;
 
@@ -898,32 +895,6 @@ namespace clspv_utils {
         mPipelineLayout.reset();
     }
 
-    VkDescriptorSet kernel_module::getLiteralSamplersDescriptorSet() const {
-        VkDescriptorSet result = VK_NULL_HANDLE;
-
-        if (-1 != mSpvMap.samplers_desc_set) {
-            result = mDescriptors[mSpvMap.samplers_desc_set];
-        }
-
-        return result;
-    }
-
-    VkDescriptorSet kernel_module::getKernelArgumentDescriptorSet(const std::string& entryPoint) const {
-        VkDescriptorSet result = VK_NULL_HANDLE;
-
-        const auto kernel_arg_map = std::find_if(mSpvMap.kernels.begin(),
-                                                 mSpvMap.kernels.end(),
-                                                 [&entryPoint](const details::spv_map::kernel& k) {
-                                                     return k.name == entryPoint;
-                                                 });
-        if (kernel_arg_map != mSpvMap.kernels.end() && -1 != kernel_arg_map->descriptor_set) {
-            result = mDescriptors[kernel_arg_map->descriptor_set];
-        }
-
-        return result;
-
-    }
-
     std::vector<std::string> kernel_module::getEntryPoints() const {
         std::vector<std::string> result;
 
@@ -939,8 +910,19 @@ namespace clspv_utils {
         details::pipeline result;
         result.mPipelineLayout = mPipelineLayout;
         result.mDescriptors = mDescriptors;
-        result.mLiteralSamplerDescriptor = getLiteralSamplersDescriptorSet();
-        result.mArgumentsDescriptor = getKernelArgumentDescriptorSet(entryPoint);
+
+        if (-1 != mSpvMap.samplers_desc_set) {
+            result.mLiteralSamplerDescriptor = result.mDescriptors[mSpvMap.samplers_desc_set];
+        }
+
+        const auto kernel_arg_map = std::find_if(mSpvMap.kernels.begin(),
+                                                 mSpvMap.kernels.end(),
+                                                 [&entryPoint](const details::spv_map::kernel& k) {
+                                                     return k.name == entryPoint;
+                                                 });
+        if (kernel_arg_map != mSpvMap.kernels.end() && -1 != kernel_arg_map->descriptor_set) {
+            result.mArgumentsDescriptor = result.mDescriptors[kernel_arg_map->descriptor_set];
+        }
 
         const unsigned int num_workgroup_sizes = 3;
         const int32_t workGroupSizes[num_workgroup_sizes] = {
