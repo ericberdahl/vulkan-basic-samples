@@ -362,6 +362,24 @@ namespace clspv_utils {
             std::vector<VkDescriptorSetLayout>  descriptors;
             VkPipelineLayout                    pipeline;
         };
+
+        struct pipeline {
+            pipeline() : mDevice(VK_NULL_HANDLE),
+                         mDescriptorLayouts(),
+                         mPipelineLayout(VK_NULL_HANDLE),
+                         mDescriptors(),
+                         mLiteralSamplerDescriptor(VK_NULL_HANDLE),
+                         mArgumentsDescriptor(VK_NULL_HANDLE) {};
+
+            void    reset();
+
+            VkDevice                            mDevice;
+            std::vector<VkDescriptorSetLayout>  mDescriptorLayouts;
+            VkPipelineLayout                    mPipelineLayout;
+            std::vector<VkDescriptorSet>        mDescriptors;
+            VkDescriptorSet                     mLiteralSamplerDescriptor;
+            VkDescriptorSet                     mArgumentsDescriptor;
+        };
     } // namespace details
 
     struct WorkgroupDimensions {
@@ -823,7 +841,8 @@ namespace clspv_utils {
         }
 
         void pipeline_layout::reset() {
-            std::for_each(descriptors.begin(), descriptors.end(), std::bind(vkDestroyDescriptorSetLayout, device, std::placeholders::_1, nullptr));
+            std::for_each(descriptors.begin(), descriptors.end(),
+                          std::bind(vkDestroyDescriptorSetLayout, device, std::placeholders::_1, nullptr));
             descriptors.clear();
 
             if (VK_NULL_HANDLE != device && VK_NULL_HANDLE != pipeline) {
