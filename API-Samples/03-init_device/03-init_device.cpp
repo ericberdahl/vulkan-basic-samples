@@ -646,7 +646,8 @@ namespace clspv_utils {
         }
 
         details::pipeline_layout create_pipeline_layout(VkDevice                device,
-                                                        const details::spv_map& spvMap) {
+                                                        const details::spv_map& spvMap,
+                                                        const std::string&      entryPoint = "") {
             details::pipeline_layout result;
             result.device = device;
 
@@ -662,35 +663,40 @@ namespace clspv_utils {
             for (auto &k : spvMap.kernels) {
                 descriptorTypes.clear();
 
-                for (auto &ka : k.args) {
-                    // ignore any argument not in offset 0
-                    if (0 != ka.offset) continue;
+                // If the caller has asked only for a pipeline layout for a single entry point,
+                // create empty descriptor layouts for all argument descriptors other than the
+                // one used by the requested entry point.
+                if (entryPoint.empty() || (k.name == entryPoint)) {
+                    for (auto &ka : k.args) {
+                        // ignore any argument not in offset 0
+                        if (0 != ka.offset) continue;
 
-                    VkDescriptorType argType;
+                        VkDescriptorType argType;
 
-                    switch (ka.kind) {
-                        case details::spv_map::arg::kind_pod:
-                        case details::spv_map::arg::kind_buffer:
-                            argType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                            break;
+                        switch (ka.kind) {
+                            case details::spv_map::arg::kind_pod:
+                            case details::spv_map::arg::kind_buffer:
+                                argType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                                break;
 
-                        case details::spv_map::arg::kind_ro_image:
-                            argType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-                            break;
+                            case details::spv_map::arg::kind_ro_image:
+                                argType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+                                break;
 
-                        case details::spv_map::arg::kind_wo_image:
-                            argType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                            break;
+                            case details::spv_map::arg::kind_wo_image:
+                                argType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                                break;
 
-                        case details::spv_map::arg::kind_sampler:
-                            argType = VK_DESCRIPTOR_TYPE_SAMPLER;
-                            break;
+                            case details::spv_map::arg::kind_sampler:
+                                argType = VK_DESCRIPTOR_TYPE_SAMPLER;
+                                break;
 
-                        default:
-                            assert(0 && "unkown argument type");
+                            default:
+                                assert(0 && "unkown argument type");
+                        }
+
+                        descriptorTypes.push_back(argType);
                     }
-
-                    descriptorTypes.push_back(argType);
                 }
 
                 result.descriptors.push_back(create_descriptor_set_layout(device, descriptorTypes));
