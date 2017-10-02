@@ -388,12 +388,8 @@ namespace clspv_utils {
         VkPipeline      createPipeline(const std::string&           entryPoint,
                                        const WorkgroupDimensions&   work_group_sizes) const;
 
-        void bindDescriptors(VkCommandBuffer command) const;
-
-    private:
-        std::vector<VkDescriptorSet>    allocateDescriptorSet(VkDescriptorPool pool) const;
-        VkDescriptorSetLayout           createDescriptorSetLayout(const std::vector<VkDescriptorType>& descriptorTypes);
-        details::pipeline_layout        createPipelineLayout(const details::spv_map& spvMap);
+        std::vector<VkDescriptorSet>    getDescriptors() const { return mDescriptors; }
+        details::pipeline_layout        getPipelineLayout() const { return mPipelineLayout; }
 
     private:
         std::string                         mName;
@@ -415,7 +411,7 @@ namespace clspv_utils {
 
         ~kernel();
 
-        void bindPipeline(VkCommandBuffer command) const;
+        void bindCommand(VkCommandBuffer command) const;
 
         std::string getEntryPoint() const { return mEntryPoint; }
         WorkgroupDimensions getWorkgroupSize() const { return mWorkgroupSizes; }
@@ -424,16 +420,16 @@ namespace clspv_utils {
         VkDescriptorSet getArgumentDescSet() const { return mArgumentDescSet; }
 
     private:
-        VkDescriptorSetLayout   createDescriptorSetLayout(const std::vector<VkDescriptorType>& descriptorTypes);
-        VkPipeline              createPipeline(const std::tuple<int,int>& work_group_sizes);
-
-    private:
         std::string         mEntryPoint;
         WorkgroupDimensions mWorkgroupSizes;
         VkDevice            mDevice;
         VkPipeline          mPipeline;
         VkDescriptorSet     mLiteralSamplerDescSet;
         VkDescriptorSet     mArgumentDescSet;
+
+        // aliased from kernel_module
+        details::pipeline_layout        mPipelineLayout;
+        std::vector<VkDescriptorSet>    mDescriptors;
     };
 
     class kernel_invocation {
@@ -456,13 +452,11 @@ namespace clspv_utils {
         void    addPodArgument(const T& pod);
 
         void    run(VkQueue                     queue,
-                    const kernel_module&        module,
                     const kernel&               kern,
                     const WorkgroupDimensions&  num_workgroups);
 
     private:
-        void        fillCommandBuffer(const kernel_module&          module,
-                                      const kernel&                 kern,
+        void        fillCommandBuffer(const kernel&                 kern,
                                       const WorkgroupDimensions&    num_workgroups);
         void        updateDescriptorSets(VkDescriptorSet literalSamplerSet,
                                          VkDescriptorSet argumentSet);
@@ -591,6 +585,124 @@ namespace clspv_utils {
             VkCommandBuffer result = VK_NULL_HANDLE;
             vulkan_utils::throwIfNotSuccess(vkAllocateCommandBuffers(device, &allocInfo, &result),
                                             "vkAllocateCommandBuffers");
+
+            return result;
+        }
+
+        std::vector<VkDescriptorSet> allocate_descriptor_sets(
+                VkDevice                                    device,
+                VkDescriptorPool                            pool,
+                const std::vector<VkDescriptorSetLayout>&   layouts) {
+            std::vector<VkDescriptorSet> result;
+
+            VkDescriptorSetAllocateInfo createInfo = {};
+            createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+            createInfo.descriptorPool = pool;
+            createInfo.descriptorSetCount = layouts.size();
+            createInfo.pSetLayouts = layouts.data();
+
+            result.resize(createInfo.descriptorSetCount, VK_NULL_HANDLE);
+            vulkan_utils::throwIfNotSuccess(vkAllocateDescriptorSets(device,
+                                                                     &createInfo,
+                                                                     result.data()),
+                                            "vkAllocateDescriptorSets");
+
+            return result;
+        }
+
+        VkDescriptorSetLayout create_descriptor_set_layout(
+                VkDevice                                device,
+                const std::vector<VkDescriptorType>&    descriptorTypes) {
+            std::vector<VkDescriptorSetLayoutBinding> bindingSet;
+
+            VkDescriptorSetLayoutBinding binding = {};
+            binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
+            binding.descriptorCount = 1;
+            binding.binding = 0;
+
+            for (auto type : descriptorTypes) {
+                binding.descriptorType = type;
+                bindingSet.push_back(binding);
+
+                ++binding.binding;
+            }
+
+            VkDescriptorSetLayoutCreateInfo createInfo = {};
+            createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+            createInfo.bindingCount = bindingSet.size();
+            createInfo.pBindings = createInfo.bindingCount ? bindingSet.data() : NULL;
+
+            VkDescriptorSetLayout result = VK_NULL_HANDLE;
+            vulkan_utils::throwIfNotSuccess(vkCreateDescriptorSetLayout(device,
+                                                                        &createInfo,
+                                                                        NULL,
+                                                                        &result),
+                                            "vkCreateDescriptorSetLayout");
+
+            return result;
+        }
+
+        details::pipeline_layout create_pipeline_layout(VkDevice                device,
+                                                        const details::spv_map& spvMap) {
+            details::pipeline_layout result;
+            result.device = device;
+
+            std::vector<VkDescriptorType> descriptorTypes;
+
+            const int num_samplers = spvMap.samplers.size();
+            if (0 < num_samplers) {
+                descriptorTypes.clear();
+                descriptorTypes.resize(num_samplers, VK_DESCRIPTOR_TYPE_SAMPLER);
+                result.descriptors.push_back(create_descriptor_set_layout(device, descriptorTypes));
+            }
+
+            for (auto &k : spvMap.kernels) {
+                descriptorTypes.clear();
+
+                for (auto &ka : k.args) {
+                    // ignore any argument not in offset 0
+                    if (0 != ka.offset) continue;
+
+                    VkDescriptorType argType;
+
+                    switch (ka.kind) {
+                        case details::spv_map::arg::kind_pod:
+                        case details::spv_map::arg::kind_buffer:
+                            argType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                            break;
+
+                        case details::spv_map::arg::kind_ro_image:
+                            argType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+                            break;
+
+                        case details::spv_map::arg::kind_wo_image:
+                            argType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                            break;
+
+                        case details::spv_map::arg::kind_sampler:
+                            argType = VK_DESCRIPTOR_TYPE_SAMPLER;
+                            break;
+
+                        default:
+                            assert(0 && "unkown argument type");
+                    }
+
+                    descriptorTypes.push_back(argType);
+                }
+
+                result.descriptors.push_back(create_descriptor_set_layout(device, descriptorTypes));
+            };
+
+            VkPipelineLayoutCreateInfo createInfo = {};
+            createInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+            createInfo.setLayoutCount = result.descriptors.size();
+            createInfo.pSetLayouts = createInfo.setLayoutCount ? result.descriptors.data() : NULL;
+
+            vulkan_utils::throwIfNotSuccess(vkCreatePipelineLayout(device,
+                                                                   &createInfo,
+                                                                   NULL,
+                                                                   &result.pipeline),
+                                            "vkCreatePipelineLayout");
 
             return result;
         }
@@ -740,8 +852,8 @@ namespace clspv_utils {
         const std::string mapFilename = moduleName + ".spvmap";
         mSpvMap = create_spv_map(mapFilename.c_str());
 
-        mPipelineLayout = createPipelineLayout(mSpvMap);
-        mDescriptors = allocateDescriptorSet(pool);
+        mPipelineLayout = create_pipeline_layout(device, mSpvMap);
+        mDescriptors = allocate_descriptor_sets(device, pool, mPipelineLayout.descriptors);
     }
 
     kernel_module::~kernel_module() {
@@ -798,119 +910,8 @@ namespace clspv_utils {
         return result;
     }
 
-    std::vector<VkDescriptorSet> kernel_module::allocateDescriptorSet(VkDescriptorPool pool) const {
-        std::vector<VkDescriptorSet> result;
-
-        VkDescriptorSetAllocateInfo createInfo = {};
-        createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
-        createInfo.descriptorPool = pool;
-        createInfo.descriptorSetCount = mPipelineLayout.descriptors.size();
-        createInfo.pSetLayouts = mPipelineLayout.descriptors.data();
-
-        result.resize(createInfo.descriptorSetCount, VK_NULL_HANDLE);
-        vulkan_utils::throwIfNotSuccess(vkAllocateDescriptorSets(mDevice,
-                                                                 &createInfo,
-                                                                 result.data()),
-                                        "vkAllocateDescriptorSets");
-
-        return result;
-    }
-
-    details::pipeline_layout kernel_module::createPipelineLayout(const details::spv_map& spvMap) {
-        details::pipeline_layout result;
-        result.device = mDevice;
-
-        std::vector<VkDescriptorType> descriptorTypes;
-
-        const int num_samplers = spvMap.samplers.size();
-        if (0 < num_samplers) {
-            descriptorTypes.clear();
-            descriptorTypes.resize(num_samplers, VK_DESCRIPTOR_TYPE_SAMPLER);
-            result.descriptors.push_back(createDescriptorSetLayout(descriptorTypes));
-        }
-
-        for (auto &k : spvMap.kernels) {
-            descriptorTypes.clear();
-
-
-            for (auto &ka : k.args) {
-                // ignore any argument not in offset 0
-                if (0 != ka.offset) continue;
-
-                VkDescriptorType argType;
-
-                switch (ka.kind) {
-                    case details::spv_map::arg::kind_pod:
-                    case details::spv_map::arg::kind_buffer:
-                        argType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                        break;
-
-                    case details::spv_map::arg::kind_ro_image:
-                        argType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-                        break;
-
-                    case details::spv_map::arg::kind_wo_image:
-                        argType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                        break;
-
-                    case details::spv_map::arg::kind_sampler:
-                        argType = VK_DESCRIPTOR_TYPE_SAMPLER;
-                        break;
-
-                    default:
-                        assert(0 && "unkown argument type");
-                }
-
-                descriptorTypes.push_back(argType);
-            }
-            result.descriptors.push_back(createDescriptorSetLayout(descriptorTypes));
-        };
-
-        VkPipelineLayoutCreateInfo createInfo = {};
-        createInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
-        createInfo.setLayoutCount = result.descriptors.size();
-        createInfo.pSetLayouts = createInfo.setLayoutCount ? result.descriptors.data() : NULL;
-
-        vulkan_utils::throwIfNotSuccess(vkCreatePipelineLayout(mDevice,
-                                                               &createInfo,
-                                                               NULL,
-                                                               &result.pipeline),
-                                        "vkCreatePipelineLayout");
-
-        return result;
-    }
-
-    VkDescriptorSetLayout kernel_module::createDescriptorSetLayout(const std::vector<VkDescriptorType>& descriptorTypes) {
-        std::vector<VkDescriptorSetLayoutBinding> bindingSet;
-
-        VkDescriptorSetLayoutBinding binding = {};
-        binding.stageFlags = VK_SHADER_STAGE_COMPUTE_BIT;
-        binding.descriptorCount = 1;
-        binding.binding = 0;
-
-        for (auto type : descriptorTypes) {
-            binding.descriptorType = type;
-            bindingSet.push_back(binding);
-
-            ++binding.binding;
-        }
-
-        VkDescriptorSetLayoutCreateInfo createInfo = {};
-        createInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
-        createInfo.bindingCount = bindingSet.size();
-        createInfo.pBindings = createInfo.bindingCount ? bindingSet.data() : NULL;
-
-        VkDescriptorSetLayout result = VK_NULL_HANDLE;
-        vulkan_utils::throwIfNotSuccess(vkCreateDescriptorSetLayout(mDevice,
-                                                                    &createInfo,
-                                                                    NULL,
-                                                                    &result),
-                                        "vkCreateDescriptorSetLayout");
-
-        return result;
-    }
-
-    VkPipeline kernel_module::createPipeline(const std::string& entryPoint, const WorkgroupDimensions& work_group_sizes) const {
+    VkPipeline kernel_module::createPipeline(const std::string&         entryPoint,
+                                             const WorkgroupDimensions& work_group_sizes) const {
         const unsigned int num_workgroup_sizes = 3;
         const int32_t workGroupSizes[num_workgroup_sizes] = {
                 work_group_sizes.x,
@@ -962,14 +963,6 @@ namespace clspv_utils {
         return result;
     }
 
-    void kernel_module::bindDescriptors(VkCommandBuffer command) const {
-        vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                mPipelineLayout.pipeline,
-                                0,
-                                mDescriptors.size(), mDescriptors.data(),
-                                0, NULL);
-    }
-
     kernel::kernel(VkDevice                     device,
                    const kernel_module&         module,
                    std::string                  entryPoint,
@@ -983,6 +976,9 @@ namespace clspv_utils {
         mLiteralSamplerDescSet = module.getLiteralSamplersDescriptorSet();
         mArgumentDescSet = module.getKernelArgumentDescriptorSet(entryPoint);
         mPipeline = module.createPipeline(entryPoint, workgroup_sizes);
+
+        mPipelineLayout = module.getPipelineLayout();
+        mDescriptors = module.getDescriptors();
     }
 
     kernel::~kernel() {
@@ -993,8 +989,14 @@ namespace clspv_utils {
         }
     }
 
-    void kernel::bindPipeline(VkCommandBuffer command) const {
+    void kernel::bindCommand(VkCommandBuffer command) const {
         vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, mPipeline);
+
+        vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE,
+                                mPipelineLayout.pipeline,
+                                0,
+                                mDescriptors.size(), mDescriptors.data(),
+                                0, NULL);
     }
 
     kernel_invocation::kernel_invocation(VkDevice           device,
@@ -1188,16 +1190,14 @@ namespace clspv_utils {
         vkUpdateDescriptorSets(mDevice, writeSets.size(), writeSets.data(), 0, nullptr);
     }
 
-    void kernel_invocation::fillCommandBuffer(const kernel_module&          module,
-                                              const kernel&                 inKernel,
+    void kernel_invocation::fillCommandBuffer(const kernel&                 inKernel,
                                               const WorkgroupDimensions&    num_workgroups) {
         VkCommandBufferBeginInfo beginInfo = {};
         beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
         vulkan_utils::throwIfNotSuccess(vkBeginCommandBuffer(mCommand, &beginInfo),
                                         "vkBeginCommandBuffer");
 
-        inKernel.bindPipeline(mCommand);
-        module.bindDescriptors(mCommand);
+        inKernel.bindCommand(mCommand);
 
         vkCmdDispatch(mCommand, num_workgroups.x, num_workgroups.y, 1);
 
@@ -1217,11 +1217,10 @@ namespace clspv_utils {
     }
 
     void kernel_invocation::run(VkQueue                     queue,
-                                const kernel_module&        module,
                                 const kernel&               kern,
                                 const WorkgroupDimensions&  num_workgroups) {
         updateDescriptorSets(kern.getLiteralSamplerDescSet(), kern.getArgumentDescSet());
-        fillCommandBuffer(module, kern, num_workgroups);
+        fillCommandBuffer(kern, num_workgroups);
         submitCommand(queue);
 
         vkQueueWaitIdle(queue);
@@ -2044,7 +2043,7 @@ void invoke_fill_kernel(const clspv_utils::kernel_module&   module,
     invocation.addLiteralSamplers(samplers.begin(), samplers.end());
     invocation.addBufferArgument(dst_buffer);
     invocation.addPodArgument(scalars);
-    invocation.run(info.graphics_queue, module, kernel, num_workgroups);
+    invocation.run(info.graphics_queue, kernel, num_workgroups);
 }
 
 void invoke_copybuffertoimage_kernel(const clspv_utils::kernel_module&   module,
@@ -2103,7 +2102,7 @@ void invoke_copybuffertoimage_kernel(const clspv_utils::kernel_module&   module,
     invocation.addWriteOnlyImageArgument(dst_image);
     invocation.addPodArgument(scalars);
 
-    invocation.run(info.graphics_queue, module, kernel, num_workgroups);
+    invocation.run(info.graphics_queue, kernel, num_workgroups);
 }
 
 void invoke_copyimagetobuffer_kernel(const clspv_utils::kernel_module&   module,
@@ -2158,7 +2157,7 @@ void invoke_copyimagetobuffer_kernel(const clspv_utils::kernel_module&   module,
     invocation.addBufferArgument(dst_buffer);
     invocation.addPodArgument(scalars);
 
-    invocation.run(info.graphics_queue, module, kernel, num_workgroups);
+    invocation.run(info.graphics_queue, kernel, num_workgroups);
 }
 
 std::tuple<int,int,int> invoke_localsize_kernel(const clspv_utils::kernel_module&   module,
@@ -2183,7 +2182,7 @@ std::tuple<int,int,int> invoke_localsize_kernel(const clspv_utils::kernel_module
 
     invocation.addBufferArgument(outArgs.buf);
 
-    invocation.run(info.graphics_queue, module, kernel, num_workgroups);
+    invocation.run(info.graphics_queue, kernel, num_workgroups);
 
     vulkan_utils::memory_map argMap(outArgs);
     auto outScalars = static_cast<const scalar_args*>(argMap.data);
@@ -2892,6 +2891,8 @@ const test_utils::module_test_bundle module_tests[] = {
                                   { "CopyImageToBufferKernel", test_copyfromimage_matrix, { 32, 32 } }
                           }
         },
+//        {   "Motion", {}    },
+//        {   "PixelFormatConvert_420", {}    },
 };
 
 test_utils::Results run_all_tests(const sample_info& info, const std::vector<VkSampler>& samplers) {
