@@ -37,6 +37,8 @@ create and destroy a Vulkan physical device
 #include <string>
 #include <util_init.hpp>
 
+#define CLSPV_KERNELS_SHARE_DESCRIPTORS 0
+
 /* ============================================================================================== */
 
 namespace vulkan_utils {
@@ -647,6 +649,10 @@ namespace clspv_utils {
         details::pipeline_layout create_pipeline_layout(VkDevice                device,
                                                         const details::spv_map& spvMap,
                                                         const std::string&      entryPoint = "") {
+#if CLSPV_KERNELS_SHARE_DESCRIPTORS
+            assert(!entryPoint.empty());
+#endif
+
             details::pipeline_layout result;
             result.device = device;
 
@@ -661,6 +667,10 @@ namespace clspv_utils {
 
             for (auto &k : spvMap.kernels) {
                 descriptorTypes.clear();
+
+#if CLSPV_KERNELS_SHARE_DESCRIPTORS
+                if (k.name != entryPoint) continue;
+#endif
 
                 // If the caller has asked only for a pipeline layout for a single entry point,
                 // create empty descriptor layouts for all argument descriptors other than the
