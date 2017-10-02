@@ -366,6 +366,7 @@ namespace clspv_utils {
         struct pipeline {
             pipeline() : mPipelineLayout(),
                          mDescriptors(),
+                         mDescriptorPool(VK_NULL_HANDLE),
                          mLiteralSamplerDescriptor(VK_NULL_HANDLE),
                          mArgumentsDescriptor(VK_NULL_HANDLE),
                          mPipeline(VK_NULL_HANDLE) {};
@@ -374,6 +375,7 @@ namespace clspv_utils {
 
             pipeline_layout                 mPipelineLayout;
             std::vector<VkDescriptorSet>    mDescriptors;
+            VkDescriptorPool                mDescriptorPool;
             VkDescriptorSet                 mLiteralSamplerDescriptor;
             VkDescriptorSet                 mArgumentsDescriptor;
             VkPipeline                      mPipeline;
@@ -403,10 +405,7 @@ namespace clspv_utils {
 
     private:
         std::string                         mName;
-        details::pipeline_layout            mPipelineLayout;
-
         VkDevice                            mDevice;
-        std::vector<VkDescriptorSet>        mDescriptors;
         VkDescriptorPool                    mDescriptorPool;
         VkShaderModule                      mShaderModule;
         details::spv_map                    mSpvMap;
@@ -845,7 +844,9 @@ namespace clspv_utils {
         }
 
         void pipeline::reset() {
-            if (mPipelineLayout.device && mPipeline) {
+            if (mPipeline) {
+                assert(VK_NULL_HANDLE != mPipelineLayout.device);
+
                 vkDestroyPipeline(mPipelineLayout.device, mPipeline, NULL);
                 mPipeline = VK_NULL_HANDLE;
             }
@@ -854,11 +855,20 @@ namespace clspv_utils {
             mArgumentsDescriptor = VK_NULL_HANDLE;
             mLiteralSamplerDescriptor = VK_NULL_HANDLE;
 
-            // DO NOT delete descriptors. These are owned by the kernel_module
-            mDescriptors.clear();
+            if (!mDescriptors.empty()) {
+                assert(VK_NULL_HANDLE != mPipelineLayout.device);
 
-            // DO NOT reset the pipeline layout. It is owned by the kernel_module
-            mPipelineLayout = pipeline_layout();
+                VkResult U_ASSERT_ONLY res = vkFreeDescriptorSets(mPipelineLayout.device,
+                                                                  mDescriptorPool,
+                                                                  mDescriptors.size(),
+                                                                  mDescriptors.data());
+                assert(res == VK_SUCCESS);
+
+                mDescriptors.clear();
+            }
+
+            mDescriptorPool = VK_NULL_HANDLE;
+            mPipelineLayout.reset();
         }
 
     } // namespace details
@@ -867,9 +877,7 @@ namespace clspv_utils {
                                  VkDescriptorPool   pool,
                                  const std::string& moduleName) :
             mName(moduleName),
-            mPipelineLayout(),
             mDevice(device),
-            mDescriptors(),
             mDescriptorPool(pool),
             mShaderModule(VK_NULL_HANDLE),
             mSpvMap() {
@@ -878,27 +886,14 @@ namespace clspv_utils {
 
         const std::string mapFilename = moduleName + ".spvmap";
         mSpvMap = create_spv_map(mapFilename.c_str());
-
-        mPipelineLayout = create_pipeline_layout(device, mSpvMap);
-        mDescriptors = allocate_descriptor_sets(device, pool, mPipelineLayout.descriptors);
     }
 
     kernel_module::~kernel_module() {
         if (mDevice) {
-            if (!mDescriptors.empty()) {
-                VkResult U_ASSERT_ONLY res = vkFreeDescriptorSets(mDevice,
-                                                                  mDescriptorPool,
-                                                                  mDescriptors.size(),
-                                                                  mDescriptors.data());
-                assert(res == VK_SUCCESS);
-            }
-
             if (mShaderModule) {
                 vkDestroyShaderModule(mDevice, mShaderModule, NULL);
             }
         }
-
-        mPipelineLayout.reset();
     }
 
     std::vector<std::string> kernel_module::getEntryPoints() const {
@@ -914,8 +909,9 @@ namespace clspv_utils {
     details::pipeline kernel_module::createPipeline(const std::string&         entryPoint,
                                                     const WorkgroupDimensions& work_group_sizes) const {
         details::pipeline result;
-        result.mPipelineLayout = mPipelineLayout;
-        result.mDescriptors = mDescriptors;
+        result.mPipelineLayout = create_pipeline_layout(mDevice, mSpvMap, entryPoint);
+        result.mDescriptors = allocate_descriptor_sets(mDevice, mDescriptorPool, result.mPipelineLayout.descriptors);
+        result.mDescriptorPool = mDescriptorPool;
 
         if (-1 != mSpvMap.samplers_desc_set) {
             result.mLiteralSamplerDescriptor = result.mDescriptors[mSpvMap.samplers_desc_set];
@@ -961,7 +957,7 @@ namespace clspv_utils {
 
         VkComputePipelineCreateInfo createInfo = {};
         createInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        createInfo.layout = mPipelineLayout.pipeline;
+        createInfo.layout = result.mPipelineLayout.pipeline;
 
         createInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
         createInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
