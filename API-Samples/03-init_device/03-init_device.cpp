@@ -364,21 +364,19 @@ namespace clspv_utils {
         };
 
         struct pipeline {
-            pipeline() : mDevice(VK_NULL_HANDLE),
-                         mDescriptorLayouts(),
-                         mPipelineLayout(VK_NULL_HANDLE),
+            pipeline() : mPipelineLayout(),
                          mDescriptors(),
                          mLiteralSamplerDescriptor(VK_NULL_HANDLE),
-                         mArgumentsDescriptor(VK_NULL_HANDLE) {};
+                         mArgumentsDescriptor(VK_NULL_HANDLE),
+                         mPipeline(VK_NULL_HANDLE) {};
 
             void    reset();
 
-            VkDevice                            mDevice;
-            std::vector<VkDescriptorSetLayout>  mDescriptorLayouts;
-            VkPipelineLayout                    mPipelineLayout;
-            std::vector<VkDescriptorSet>        mDescriptors;
-            VkDescriptorSet                     mLiteralSamplerDescriptor;
-            VkDescriptorSet                     mArgumentsDescriptor;
+            pipeline_layout                 mPipelineLayout;
+            std::vector<VkDescriptorSet>    mDescriptors;
+            VkDescriptorSet                 mLiteralSamplerDescriptor;
+            VkDescriptorSet                 mArgumentsDescriptor;
+            VkPipeline                      mPipeline;
         };
     } // namespace details
 
@@ -403,11 +401,8 @@ namespace clspv_utils {
         std::string                 getName() const { return mName; }
         std::vector<std::string>    getEntryPoints() const;
 
-        VkPipeline      createPipeline(const std::string&           entryPoint,
-                                       const WorkgroupDimensions&   work_group_sizes) const;
-
-        std::vector<VkDescriptorSet>    getDescriptors() const { return mDescriptors; }
-        details::pipeline_layout        getPipelineLayout() const { return mPipelineLayout; }
+        details::pipeline           createPipeline(const std::string&           entryPoint,
+                                                   const WorkgroupDimensions&   work_group_sizes) const;
 
     private:
         std::string                         mName;
@@ -434,20 +429,13 @@ namespace clspv_utils {
         std::string getEntryPoint() const { return mEntryPoint; }
         WorkgroupDimensions getWorkgroupSize() const { return mWorkgroupSizes; }
 
-        VkDescriptorSet getLiteralSamplerDescSet() const { return mLiteralSamplerDescSet; }
-        VkDescriptorSet getArgumentDescSet() const { return mArgumentDescSet; }
+        VkDescriptorSet getLiteralSamplerDescSet() const { return mPipeline.mLiteralSamplerDescriptor; }
+        VkDescriptorSet getArgumentDescSet() const { return mPipeline.mArgumentsDescriptor; }
 
     private:
         std::string         mEntryPoint;
         WorkgroupDimensions mWorkgroupSizes;
-        VkDevice            mDevice;
-        VkPipeline          mPipeline;
-        VkDescriptorSet     mLiteralSamplerDescSet;
-        VkDescriptorSet     mArgumentDescSet;
-
-        // aliased from kernel_module
-        details::pipeline_layout        mPipelineLayout;
-        std::vector<VkDescriptorSet>    mDescriptors;
+        details::pipeline   mPipeline;
     };
 
     class kernel_invocation {
@@ -853,6 +841,23 @@ namespace clspv_utils {
             pipeline = VK_NULL_HANDLE;
         }
 
+        void pipeline::reset() {
+            if (mPipelineLayout.device && mPipeline) {
+                vkDestroyPipeline(mPipelineLayout.device, mPipeline, NULL);
+                mPipeline = VK_NULL_HANDLE;
+            }
+
+            // NULL out cached descriptors
+            mArgumentsDescriptor = VK_NULL_HANDLE;
+            mLiteralSamplerDescriptor = VK_NULL_HANDLE;
+
+            // DO NOT delete descriptors. These are owned by the kernel_module
+            mDescriptors.clear();
+
+            // DO NOT reset the pipeline layout. It is owned by the kernel_module
+            mPipelineLayout = pipeline_layout();
+        }
+
     } // namespace details
 
     kernel_module::kernel_module(VkDevice           device,
@@ -929,8 +934,14 @@ namespace clspv_utils {
         return result;
     }
 
-    VkPipeline kernel_module::createPipeline(const std::string&         entryPoint,
-                                             const WorkgroupDimensions& work_group_sizes) const {
+    details::pipeline kernel_module::createPipeline(const std::string&         entryPoint,
+                                                    const WorkgroupDimensions& work_group_sizes) const {
+        details::pipeline result;
+        result.mPipelineLayout = mPipelineLayout;
+        result.mDescriptors = mDescriptors;
+        result.mLiteralSamplerDescriptor = getLiteralSamplersDescriptorSet();
+        result.mArgumentsDescriptor = getKernelArgumentDescriptorSet(entryPoint);
+
         const unsigned int num_workgroup_sizes = 3;
         const int32_t workGroupSizes[num_workgroup_sizes] = {
                 work_group_sizes.x,
@@ -970,13 +981,12 @@ namespace clspv_utils {
         createInfo.stage.pName = entryPoint.c_str();
         createInfo.stage.pSpecializationInfo = &specializationInfo;
 
-        VkPipeline result = VK_NULL_HANDLE;
         vulkan_utils::throwIfNotSuccess(vkCreateComputePipelines(mDevice,
                                                                  VK_NULL_HANDLE,
                                                                  1,
                                                                  &createInfo,
                                                                  NULL,
-                                                                 &result),
+                                                                 &result.mPipeline),
                                         "vkCreateComputePipelines");
 
         return result;
@@ -988,33 +998,21 @@ namespace clspv_utils {
                    const WorkgroupDimensions&   workgroup_sizes) :
             mEntryPoint(entryPoint),
             mWorkgroupSizes(workgroup_sizes),
-            mDevice(device),
-            mPipeline(VK_NULL_HANDLE),
-            mLiteralSamplerDescSet(VK_NULL_HANDLE),
-            mArgumentDescSet(VK_NULL_HANDLE){
-        mLiteralSamplerDescSet = module.getLiteralSamplersDescriptorSet();
-        mArgumentDescSet = module.getKernelArgumentDescriptorSet(entryPoint);
+            mPipeline() {
         mPipeline = module.createPipeline(entryPoint, workgroup_sizes);
-
-        mPipelineLayout = module.getPipelineLayout();
-        mDescriptors = module.getDescriptors();
     }
 
     kernel::~kernel() {
-        if (mDevice) {
-            if (mPipeline) {
-                vkDestroyPipeline(mDevice, mPipeline, NULL);
-            }
-        }
+        mPipeline.reset();
     }
 
     void kernel::bindCommand(VkCommandBuffer command) const {
-        vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, mPipeline);
+        vkCmdBindPipeline(command, VK_PIPELINE_BIND_POINT_COMPUTE, mPipeline.mPipeline);
 
         vkCmdBindDescriptorSets(command, VK_PIPELINE_BIND_POINT_COMPUTE,
-                                mPipelineLayout.pipeline,
+                                mPipeline.mPipelineLayout.pipeline,
                                 0,
-                                mDescriptors.size(), mDescriptors.data(),
+                                mPipeline.mDescriptors.size(), mPipeline.mDescriptors.data(),
                                 0, NULL);
     }
 
