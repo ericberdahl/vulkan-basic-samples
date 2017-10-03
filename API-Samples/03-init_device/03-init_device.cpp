@@ -37,7 +37,7 @@ create and destroy a Vulkan physical device
 #include <string>
 #include <util_init.hpp>
 
-#define CLSPV_KERNELS_SHARE_DESCRIPTORS 0
+#define CLSPV_KERNELS_SHARE_DESCRIPTORS 1
 
 /* ============================================================================================== */
 
