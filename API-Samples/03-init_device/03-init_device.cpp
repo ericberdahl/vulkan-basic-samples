@@ -919,69 +919,78 @@ namespace clspv_utils {
     details::pipeline kernel_module::createPipeline(const std::string&         entryPoint,
                                                     const WorkgroupDimensions& work_group_sizes) const {
         details::pipeline result;
-        result.mPipelineLayout = create_pipeline_layout(mDevice, mSpvMap, entryPoint);
-        result.mDescriptors = allocate_descriptor_sets(mDevice, mDescriptorPool, result.mPipelineLayout.descriptors);
-        result.mDescriptorPool = mDescriptorPool;
+        try {
+            result.mPipelineLayout = create_pipeline_layout(mDevice, mSpvMap, entryPoint);
+            result.mDescriptorPool = mDescriptorPool;
+            result.mDescriptors = allocate_descriptor_sets(mDevice, mDescriptorPool,
+                                                           result.mPipelineLayout.descriptors);
 
-        if (-1 != mSpvMap.samplers_desc_set) {
-            result.mLiteralSamplerDescriptor = result.mDescriptors[mSpvMap.samplers_desc_set];
+            if (-1 != mSpvMap.samplers_desc_set) {
+                result.mLiteralSamplerDescriptor = result.mDescriptors[mSpvMap.samplers_desc_set];
+            }
+
+            const auto kernel_arg_map = std::find_if(mSpvMap.kernels.begin(),
+                                                     mSpvMap.kernels.end(),
+                                                     [&entryPoint](
+                                                             const details::spv_map::kernel &k) {
+                                                         return k.name == entryPoint;
+                                                     });
+            if (kernel_arg_map != mSpvMap.kernels.end() && -1 != kernel_arg_map->descriptor_set) {
+                result.mArgumentsDescriptor = result.mDescriptors[kernel_arg_map->descriptor_set];
+            }
+
+            const unsigned int num_workgroup_sizes = 3;
+            const int32_t workGroupSizes[num_workgroup_sizes] = {
+                    work_group_sizes.x,
+                    work_group_sizes.y,
+                    1
+            };
+            const VkSpecializationMapEntry specializationEntries[num_workgroup_sizes] = {
+                    {
+                            0,                          // specialization constant 0 - workgroup size X
+                            0 * sizeof(int32_t),          // offset - start of workGroupSizes array
+                            sizeof(workGroupSizes[0])   // sizeof the first element
+                    },
+                    {
+                            1,                          // specialization constant 1 - workgroup size Y
+                            1 * sizeof(int32_t),            // offset - one element into the array
+                            sizeof(workGroupSizes[1])   // sizeof the second element
+                    },
+                    {
+                            2,                          // specialization constant 2 - workgroup size Z
+                            2 * sizeof(int32_t),          // offset - two elements into the array
+                            sizeof(workGroupSizes[2])   // sizeof the second element
+                    }
+            };
+            VkSpecializationInfo specializationInfo = {};
+            specializationInfo.mapEntryCount = num_workgroup_sizes;
+            specializationInfo.pMapEntries = specializationEntries;
+            specializationInfo.dataSize = sizeof(workGroupSizes);
+            specializationInfo.pData = workGroupSizes;
+
+            VkComputePipelineCreateInfo createInfo = {};
+            createInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
+            createInfo.layout = result.mPipelineLayout.pipeline;
+
+            createInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+            createInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
+            createInfo.stage.module = mShaderModule;
+            createInfo.stage.pName = entryPoint.c_str();
+            createInfo.stage.pSpecializationInfo = &specializationInfo;
+
+            vulkan_utils::throwIfNotSuccess(vkCreateComputePipelines(mDevice,
+                                                                     VK_NULL_HANDLE,
+                                                                     1,
+                                                                     &createInfo,
+                                                                     NULL,
+                                                                     &result.mPipeline),
+                                            "vkCreateComputePipelines");
         }
-
-        const auto kernel_arg_map = std::find_if(mSpvMap.kernels.begin(),
-                                                 mSpvMap.kernels.end(),
-                                                 [&entryPoint](const details::spv_map::kernel& k) {
-                                                     return k.name == entryPoint;
-                                                 });
-        if (kernel_arg_map != mSpvMap.kernels.end() && -1 != kernel_arg_map->descriptor_set) {
-            result.mArgumentsDescriptor = result.mDescriptors[kernel_arg_map->descriptor_set];
+        catch(...)
+        {
+            result.reset();
+            throw;
         }
-
-        const unsigned int num_workgroup_sizes = 3;
-        const int32_t workGroupSizes[num_workgroup_sizes] = {
-                work_group_sizes.x,
-                work_group_sizes.y,
-                1
-        };
-        const VkSpecializationMapEntry specializationEntries[num_workgroup_sizes] = {
-                {
-                        0,                          // specialization constant 0 - workgroup size X
-                        0*sizeof(int32_t),          // offset - start of workGroupSizes array
-                        sizeof(workGroupSizes[0])   // sizeof the first element
-                },
-                {
-                        1,                          // specialization constant 1 - workgroup size Y
-                        1*sizeof(int32_t),            // offset - one element into the array
-                        sizeof(workGroupSizes[1])   // sizeof the second element
-                },
-                {
-                        2,                          // specialization constant 2 - workgroup size Z
-                        2*sizeof(int32_t),          // offset - two elements into the array
-                        sizeof(workGroupSizes[2])   // sizeof the second element
-                }
-        };
-        VkSpecializationInfo specializationInfo = {};
-        specializationInfo.mapEntryCount = num_workgroup_sizes;
-        specializationInfo.pMapEntries = specializationEntries;
-        specializationInfo.dataSize = sizeof(workGroupSizes);
-        specializationInfo.pData = workGroupSizes;
-
-        VkComputePipelineCreateInfo createInfo = {};
-        createInfo.sType = VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO;
-        createInfo.layout = result.mPipelineLayout.pipeline;
-
-        createInfo.stage.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
-        createInfo.stage.stage = VK_SHADER_STAGE_COMPUTE_BIT;
-        createInfo.stage.module = mShaderModule;
-        createInfo.stage.pName = entryPoint.c_str();
-        createInfo.stage.pSpecializationInfo = &specializationInfo;
-
-        vulkan_utils::throwIfNotSuccess(vkCreateComputePipelines(mDevice,
-                                                                 VK_NULL_HANDLE,
-                                                                 1,
-                                                                 &createInfo,
-                                                                 NULL,
-                                                                 &result.mPipeline),
-                                        "vkCreateComputePipelines");
 
         return result;
     }
