@@ -64,8 +64,9 @@ android {
                     'proguard-rules.pro'
         }
     }
-    
-    
+
+    sourceSets.main.jniLibs.srcDirs file(ndkDir).absolutePath +
+                '/sources/third_party/vulkan/src/build-android/jniLibs'
 }
 
 dependencies {
