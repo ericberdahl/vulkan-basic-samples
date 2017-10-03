@@ -37,8 +37,6 @@ create and destroy a Vulkan physical device
 #include <string>
 #include <util_init.hpp>
 
-#define CLSPV_KERNELS_SHARE_DESCRIPTORS 1
-
 /* ============================================================================================== */
 
 namespace vulkan_utils {
@@ -350,6 +348,9 @@ namespace clspv_utils {
 
             spv_map() : samplers(), kernels(), samplers_desc_set(-1) {};
 
+            kernel* findKernel(const std::string& name);
+            const kernel* findKernel(const std::string& name) const;
+
             std::vector<sampler> samplers;
             int samplers_desc_set;
             std::vector<kernel> kernels;
@@ -648,64 +649,60 @@ namespace clspv_utils {
 
         details::pipeline_layout create_pipeline_layout(VkDevice                device,
                                                         const details::spv_map& spvMap,
-                                                        const std::string&      entryPoint = "") {
-#if CLSPV_KERNELS_SHARE_DESCRIPTORS
+                                                        const std::string&      entryPoint) {
             assert(!entryPoint.empty());
-#endif
 
             details::pipeline_layout result;
             result.device = device;
 
             std::vector<VkDescriptorType> descriptorTypes;
 
-            const int num_samplers = spvMap.samplers.size();
-            if (0 < num_samplers) {
+            if (!spvMap.samplers.empty()) {
+                assert(0 == spvMap.samplers_desc_set);
+
                 descriptorTypes.clear();
-                descriptorTypes.resize(num_samplers, VK_DESCRIPTOR_TYPE_SAMPLER);
+                descriptorTypes.resize(spvMap.samplers.size(), VK_DESCRIPTOR_TYPE_SAMPLER);
                 result.descriptors.push_back(create_descriptor_set_layout(device, descriptorTypes));
             }
 
-            for (auto &k : spvMap.kernels) {
-                descriptorTypes.clear();
+            const auto kernel = spvMap.findKernel(entryPoint);
+            if (kernel) {
+                assert(kernel->descriptor_set == (spvMap.samplers.empty() ? 0 : 1));
 
-#if CLSPV_KERNELS_SHARE_DESCRIPTORS
-                if (k.name != entryPoint) continue;
-#endif
+                descriptorTypes.clear();
 
                 // If the caller has asked only for a pipeline layout for a single entry point,
                 // create empty descriptor layouts for all argument descriptors other than the
                 // one used by the requested entry point.
-                if (entryPoint.empty() || (k.name == entryPoint)) {
-                    for (auto &ka : k.args) {
-                        // ignore any argument not in offset 0
-                        if (0 != ka.offset) continue;
+                for (auto &ka : kernel->args) {
+                    // ignore any argument not in offset 0
+                    if (0 != ka.offset) continue;
 
-                        VkDescriptorType argType;
+                    VkDescriptorType argType;
 
-                        switch (ka.kind) {
-                            case details::spv_map::arg::kind_pod:
-                            case details::spv_map::arg::kind_buffer:
-                                argType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
-                                break;
+                    switch (ka.kind) {
+                        case details::spv_map::arg::kind_pod:
+                        case details::spv_map::arg::kind_buffer:
+                            argType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+                            break;
 
-                            case details::spv_map::arg::kind_ro_image:
-                                argType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
-                                break;
+                        case details::spv_map::arg::kind_ro_image:
+                            argType = VK_DESCRIPTOR_TYPE_SAMPLED_IMAGE;
+                            break;
 
-                            case details::spv_map::arg::kind_wo_image:
-                                argType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
-                                break;
+                        case details::spv_map::arg::kind_wo_image:
+                            argType = VK_DESCRIPTOR_TYPE_STORAGE_IMAGE;
+                            break;
 
-                            case details::spv_map::arg::kind_sampler:
-                                argType = VK_DESCRIPTOR_TYPE_SAMPLER;
-                                break;
+                        case details::spv_map::arg::kind_sampler:
+                            argType = VK_DESCRIPTOR_TYPE_SAMPLER;
+                            break;
 
-                            default:
-                                assert(0 && "unkown argument type");
-                        }
-
-                        descriptorTypes.push_back(argType);
+                        default:
+                            assert(0 && "unkown argument type");
                     }
+
+                    descriptorTypes.push_back(argType);
                 }
 
                 result.descriptors.push_back(create_descriptor_set_layout(device, descriptorTypes));
@@ -783,15 +780,13 @@ namespace clspv_utils {
                         }
                     }
                 } else if ("kernel" == key) {
-                    auto kernel = std::find_if(result.kernels.begin(), result.kernels.end(),
-                                               [&value](const spv_map::kernel &iter) {
-                                                   return iter.name == value;
-                                               });
-                    if (kernel == result.kernels.end()) {
-                        kernel = result.kernels.insert(kernel, spv_map::kernel());
+                    auto kernel = result.findKernel(value);
+                    if (!kernel) {
+                        result.kernels.push_back(spv_map::kernel());
+                        kernel = &result.kernels.back();
                         kernel->name = value;
                     }
-                    assert(kernel != result.kernels.end());
+                    assert(kernel);
 
                     auto ka = kernel->args.end();
 
@@ -831,13 +826,20 @@ namespace clspv_utils {
                 }
             }
 
-            std::sort(result.kernels.begin(),
-                      result.kernels.end(),
-                      [](const spv_map::kernel &a, const spv_map::kernel &b) {
-                          return a.descriptor_set < b.descriptor_set;
-                      });
-
             return result;
+        }
+
+        spv_map::kernel* spv_map::findKernel(const std::string& name) {
+            return const_cast<kernel*>(const_cast<const spv_map*>(this)->findKernel(name));
+        }
+
+        const spv_map::kernel* spv_map::findKernel(const std::string& name) const {
+            auto kernel = std::find_if(kernels.begin(), kernels.end(),
+                                       [&name](const spv_map::kernel &iter) {
+                                           return iter.name == name;
+                                       });
+
+            return (kernel == kernels.end() ? nullptr : &(*kernel));
         }
 
         void pipeline_layout::reset() {
@@ -929,13 +931,8 @@ namespace clspv_utils {
                 result.mLiteralSamplerDescriptor = result.mDescriptors[mSpvMap.samplers_desc_set];
             }
 
-            const auto kernel_arg_map = std::find_if(mSpvMap.kernels.begin(),
-                                                     mSpvMap.kernels.end(),
-                                                     [&entryPoint](
-                                                             const details::spv_map::kernel &k) {
-                                                         return k.name == entryPoint;
-                                                     });
-            if (kernel_arg_map != mSpvMap.kernels.end() && -1 != kernel_arg_map->descriptor_set) {
+            const auto kernel_arg_map = mSpvMap.findKernel(entryPoint);
+            if (kernel_arg_map && -1 != kernel_arg_map->descriptor_set) {
                 result.mArgumentsDescriptor = result.mDescriptors[kernel_arg_map->descriptor_set];
             }
 
