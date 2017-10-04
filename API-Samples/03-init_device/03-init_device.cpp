@@ -30,6 +30,7 @@ create and destroy a Vulkan physical device
 #include <functional>
 #include <iostream>
 #include <limits>
+#include <memory>
 #include <cassert>
 #include <cstdlib>
 #include <fstream>
@@ -511,13 +512,16 @@ namespace clspv_utils {
 
         details::spv_map create_spv_map(const char *spvmapFilename) {
             // Read the spvmap file into a string buffer
-            std::FILE *spvmap_file = AndroidFopen(spvmapFilename, "rb");
-            assert(spvmap_file != NULL);
-            std::fseek(spvmap_file, 0, SEEK_END);
-            std::string buffer(std::ftell(spvmap_file), ' ');
-            std::fseek(spvmap_file, 0, SEEK_SET);
-            std::fread(&buffer.front(), 1, buffer.length(), spvmap_file);
-            std::fclose(spvmap_file);
+            std::unique_ptr<std::FILE, decltype(&std::fclose)> spvmap_file(AndroidFopen(spvmapFilename, "rb"),
+                                                                           &std::fclose);
+            assert(spvmap_file);
+
+            std::fseek(spvmap_file.get(), 0, SEEK_END);
+            std::string buffer(std::ftell(spvmap_file.get()), ' ');
+            std::fseek(spvmap_file.get(), 0, SEEK_SET);
+            std::fread(&buffer.front(), 1, buffer.length(), spvmap_file.get());
+
+            spvmap_file.reset();
 
             // parse the spvmap file contents
             std::istringstream in(buffer);
