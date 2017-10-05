@@ -804,11 +804,9 @@ namespace clspv_utils {
                             const int arg_index = std::atoi(value.c_str());
 
                             if (kernel->args.size() <= arg_index) {
-                                ka = kernel->args.insert(ka, arg_index - kernel->args.size() + 1,
-                                                         spv_map::arg());
-                            } else {
-                                ka = std::next(kernel->args.begin(), arg_index);
+                                kernel->args.resize(arg_index + 1, spv_map::arg());
                             }
+                            ka = std::next(kernel->args.begin(), arg_index);
 
                             assert(ka != kernel->args.end());
                         } else if ("descriptorSet" == key) {
@@ -2554,6 +2552,7 @@ namespace test_utils {
             result += success;
 
             std::vector<std::string> entryPoints(module.getEntryPoints());
+            int num_success_kernels = 0;
             for (auto ep : entryPoints) {
                 const auto epTest = std::find_if(kernelTests.begin(), kernelTests.end(),
                                                  [&ep](const kernel_test_map& ktm) {
@@ -2565,17 +2564,32 @@ namespace test_utils {
                     num_workgroups = epTest->workgroupSize;
                 }
 
-                if (0 != num_workgroups.x || 0 != num_workgroups.y) {
+                if (0 == num_workgroups.x && 0 == num_workgroups.y) {
                     // WorkgroupDimensions(0, 0) is a sentinel to skip this kernel entirely
-                    result += test_kernel(module,
-                                          ep,
-                                          epTest == kernelTests.end() ? nullptr : epTest->test,
-                                          num_workgroups,
-                                          info,
-                                          samplers,
-                                          opts);
+                    LOGI("%s/%s: Skipping kernel", moduleName.c_str(), ep.c_str());
+                }
+                else {
+
+                    auto kernel_result = test_kernel(
+                            module,
+                            ep,
+                            epTest == kernelTests.end() ? nullptr : epTest->test,
+                            num_workgroups,
+                            info,
+                            samplers,
+                            opts);
+                    result += kernel_result;
+
+                    if (count_failures(kernel_result) == 0 && count_successes(kernel_result) > 0) {
+                        ++num_success_kernels;
+                    }
                 }
             }
+
+            LOGI("%s: %d/%d kernel successes",
+                 moduleName.c_str(),
+                 num_success_kernels,
+                 (int)entryPoints.size());
 
             return result;
         });
@@ -2905,26 +2919,24 @@ test_utils::Results test_copyfromimage_matrix(const clspv_utils::kernel_module& 
 
 const test_utils::module_test_bundle module_tests[] = {
         {
-                "localsize",
+                "clspv_tests/localsize",
                 {
-                        { "ReadLocalSize", test_readlocalsize }
-                }
+                        {"ReadLocalSize", test_readlocalsize}
+                },
         },
         {
-                "Fills",
+                "clspv_tests/Fills",
                 {
                         { "FillWithColorKernel", test_fill_series, { 32, 32 } }
                 }
         },
         {
-                "Memory",
+                "clspv_tests/Memory",
                 {
                         { "CopyBufferToImageKernel", test_copytoimage_matrix, { 32, 32 } },
                         { "CopyImageToBufferKernel", test_copyfromimage_matrix, { 32, 32 } }
                 }
         },
-//        {   "Motion", {}    },
-//        {   "PixelFormatConvert_420", {}    },
 };
 
 test_utils::Results run_all_tests(const sample_info& info, const std::vector<VkSampler>& samplers) {
