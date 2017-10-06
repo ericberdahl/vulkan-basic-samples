@@ -549,14 +549,15 @@ namespace clspv_utils {
         }
 
         VkShaderModule create_shader(VkDevice device, const std::string& spvFilename) {
-            std::FILE* spv_file = AndroidFopen(spvFilename.c_str(), "rb");
+            std::unique_ptr<std::FILE, decltype(&std::fclose)> spv_file(AndroidFopen(spvFilename.c_str(), "rb"),
+                                                                        &std::fclose);
             if (!spv_file) {
                 throw std::runtime_error("can't open file: " + spvFilename);
             }
 
-            std::fseek(spv_file, 0, SEEK_END);
+            std::fseek(spv_file.get(), 0, SEEK_END);
             // Use vector of uint32_t to ensure alignment is satisfied.
-            const auto num_bytes = std::ftell(spv_file);
+            const auto num_bytes = std::ftell(spv_file.get());
             if (0 != (num_bytes % sizeof(uint32_t))) {
                 throw std::runtime_error("file size of " + spvFilename + " inappropriate for spv file");
             }
@@ -564,10 +565,10 @@ namespace clspv_utils {
             std::vector<uint32_t> spvModule(num_words);
             assert(num_bytes == (spvModule.size() * sizeof(uint32_t)));
 
-            std::fseek(spv_file, 0, SEEK_SET);
-            std::fread(spvModule.data(), 1, num_bytes, spv_file);
+            std::fseek(spv_file.get(), 0, SEEK_SET);
+            std::fread(spvModule.data(), 1, num_bytes, spv_file.get());
 
-            std::fclose(spv_file);
+            spv_file.reset();
 
             VkShaderModuleCreateInfo shaderModuleCreateInfo = {};
             shaderModuleCreateInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
@@ -2939,6 +2940,67 @@ const test_utils::module_test_bundle module_tests[] = {
         },
 };
 
+std::vector<test_utils::module_test_bundle> read_loadmodule_file() {
+    std::vector<test_utils::module_test_bundle> result;
+
+    std::unique_ptr<std::FILE, decltype(&std::fclose)> spvmap_file(AndroidFopen("loadmodules.txt", "r"),
+                                                                   &std::fclose);
+    if (spvmap_file) {
+        std::fseek(spvmap_file.get(), 0, SEEK_END);
+        std::string buffer(std::ftell(spvmap_file.get()), ' ');
+        std::fseek(spvmap_file.get(), 0, SEEK_SET);
+        std::fread(&buffer.front(), 1, buffer.length(), spvmap_file.get());
+        spvmap_file.reset();
+
+        std::istringstream in(buffer);
+        while (!in.eof()) {
+            std::string line;
+            std::getline(in, line);
+
+            std::istringstream in_line(line);
+
+            std::string op;
+            in_line >> op;
+            if (op.empty() || op[0] == '#') {
+                // line is either blank or a comment, skip it
+            }
+            else if (op == "+") {
+                // add module to list of modules to load
+                std::string moduleName;
+                in_line >> moduleName;
+                result.push_back({ moduleName });
+            }
+            else if (op == "-") {
+                // skip kernel in module
+                std::string moduleName;
+                in_line >> moduleName;
+
+                auto mod_map = std::find_if(result.begin(),
+                                            result.end(),
+                                            [&moduleName](const test_utils::module_test_bundle& mb) {
+                                                return mb.name == moduleName;
+                                            });
+                if (mod_map != result.end()) {
+                    std::string entryPoint;
+                    in_line >> entryPoint;
+
+                    mod_map->kernelTests.push_back({ entryPoint, nullptr, clspv_utils::WorkgroupDimensions(0, 0) });
+                }
+                else {
+                    LOGE("read_loadmodule_file: cannot find module '%s' from command '%s'",
+                         moduleName.c_str(),
+                         line.c_str());
+                }
+            }
+            else {
+                LOGE("read_loadmodule_file: ignoring ill-formed line '%s'", line.c_str());
+            }
+        }
+    }
+
+    return result;
+}
+
 test_utils::Results run_all_tests(const sample_info& info, const std::vector<VkSampler>& samplers) {
     const test_utils::options opts = {
             false,  // logVerbose
@@ -2949,6 +3011,11 @@ test_utils::Results run_all_tests(const sample_info& info, const std::vector<VkS
     auto test_results = test_utils::no_result;
 
     for (auto m : module_tests) {
+        test_results += test_utils::test_module(m.name, m.kernelTests, info, samplers, opts);
+    }
+
+    auto loadmodule_tests = read_loadmodule_file();
+    for (auto m : loadmodule_tests) {
         test_results += test_utils::test_module(m.name, m.kernelTests, info, samplers, opts);
     }
 
