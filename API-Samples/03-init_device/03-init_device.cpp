@@ -822,7 +822,7 @@ namespace clspv_utils {
                             ka->binding = std::atoi(value.c_str());
                         } else if ("offset" == key) {
                             ka->offset = std::atoi(value.c_str());
-                        } else if ("argType" == key) {
+                        } else if ("argKind" == key) {
                             ka->kind = parse_argType(value);
                         }
                     }
