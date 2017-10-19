@@ -1319,14 +1319,6 @@ enum {
 
 /* ============================================================================================== */
 
-std::pair<int,int> operator+=(std::pair<int,int>& l, const std::pair<int,int>& r) {
-    l.first += r.first;
-    l.second += r.second;
-    return l;
-};
-
-/* ============================================================================================== */
-
 template <typename T>
 struct alignas(2*sizeof(T)) vec2 {
     vec2(T a, T b) : x(a), y(b) {}
@@ -2292,14 +2284,46 @@ namespace test_utils {
         }
     }
 
-    typedef std::pair<int,int>  Results;
+    struct Results {
+        Results(unsigned int testSuccess,
+                unsigned int testFailure,
+                unsigned int loadSuccess,
+                unsigned int loadSkip,
+                unsigned int loadFail) : mNumTestSuccess(testSuccess),
+                                         mNumTestFail(testFailure),
+                                         mNumKernelLoadSuccess(loadSuccess),
+                                         mNumKernelLoadSkip(loadSkip),
+                                         mNumKernelLoadFail(loadFail) {}
+        Results() : Results(0, 0, 0, 0, 0) {}
 
-    int count_successes(Results r) { return r.first; }
-    int count_failures(Results r) { return r.second; }
+        static const Results sTestSuccess;
+        static const Results sTestFailure;
+        static const Results sKernelLoadSuccess;
+        static const Results sKernelLoadSkip;
+        static const Results sKernelLoadFail;
 
-    const Results   no_result = std::make_pair(0, 0);
-    const Results   success = std::make_pair(1, 0);
-    const Results   failure = std::make_pair(0, 1);
+        Results& operator+=(const Results& other) {
+            mNumTestSuccess += other.mNumTestSuccess;
+            mNumTestFail += other.mNumTestFail;
+            mNumKernelLoadSuccess += other.mNumKernelLoadSuccess;
+            mNumKernelLoadSkip += other.mNumKernelLoadSkip;
+            mNumKernelLoadFail += other.mNumKernelLoadFail;
+            return *this;
+        }
+
+        unsigned int    mNumTestSuccess;
+        unsigned int    mNumTestFail;
+
+        unsigned int    mNumKernelLoadSuccess;
+        unsigned int    mNumKernelLoadSkip;
+        unsigned int    mNumKernelLoadFail;
+    };
+
+    const Results Results::sTestSuccess(1, 0, 0, 0, 0);
+    const Results Results::sTestFailure(0, 1, 0, 0, 0);
+    const Results Results::sKernelLoadSuccess(0, 0, 1, 0, 0);
+    const Results Results::sKernelLoadSkip(0, 0, 0, 1, 0);
+    const Results Results::sKernelLoadFail(0, 0, 0, 0, 1);
 
     struct options {
         bool    logVerbose;
@@ -2435,8 +2459,11 @@ namespace test_utils {
     }
 
     template<typename Fn>
-    Results runInExceptionContext(const std::string& label, const std::string& stage, Fn f) {
-        Results result = no_result;
+    Results runInExceptionContext(const std::string& label,
+                                  const std::string& stage,
+                                  Fn f,
+                                  Results failureResult = Results::sTestFailure) {
+        Results result = failureResult;
 
         try {
             result = f();
@@ -2445,15 +2472,12 @@ namespace test_utils {
             LOGE("%s/%s: Vulkan error (%s, VkResult=%d)",
                  label.c_str(), stage.c_str(),
                  e.what(), e.get_result());
-            result = failure;
         }
         catch(const std::exception& e) {
             LOGE("%s/%s: unkonwn error (%s)", label.c_str(), stage.c_str(), e.what());
-            result = failure;
         }
         catch(...) {
             LOGE("%s/%s: unknown error", label.c_str(), stage.c_str());
-            result = failure;
         }
 
         return result;
@@ -2478,7 +2502,7 @@ namespace test_utils {
                                    const sample_info&                   info,
                                    const std::vector<VkSampler>&        samplers,
                                    const options&                       opts) {
-        Results result = no_result;
+        Results result;
 
         if (testFn) {
             const std::string label = module.getName() + "/" + kernel.getEntryPoint();
@@ -2488,11 +2512,11 @@ namespace test_utils {
                                       return testFn(module, kernel, info, samplers, opts);
                                   });
 
-            if ((count_successes(result) > 0 && opts.logCorrect) ||
-                    (count_failures(result) > 0 && opts.logIncorrect)) {
+            if ((result.mNumTestSuccess > 0 && opts.logCorrect) ||
+                    (result.mNumTestFail > 0 && opts.logIncorrect)) {
                 LOGE("%s: Successes=%d Failures=%d",
                      label.c_str(),
-                     count_successes(result), count_failures(result));
+                     result.mNumTestSuccess, result.mNumTestFail);
             }
         }
 
@@ -2506,7 +2530,7 @@ namespace test_utils {
                                    const sample_info&                   info,
                                    const std::vector<VkSampler>&        samplers,
                                    const options&                       opts) {
-        Results result = no_result;
+        Results result;
 
         for (; first != last; ++first) {
             result += test_kernel_invocation(module, kernel, *first, info, samplers, opts);
@@ -2525,11 +2549,12 @@ namespace test_utils {
         return runInExceptionContext(module.getName() + "/" + entryPoint,
                                      "compiling kernel",
                                      [&]() {
-                                         Results results = no_result;
+                                         Results results;
 
                                          clspv_utils::kernel kernel(info.device, module,
                                                                     entryPoint, numWorkgroups);
-                                         results += success;
+                                         results += Results::sKernelLoadSuccess;
+
                                          results += test_kernel_invocation(module,
                                                                            kernel,
                                                                            testFn,
@@ -2538,7 +2563,8 @@ namespace test_utils {
                                                                            opts);
 
                                          return results;
-                                     });
+                                     },
+                                     Results::sKernelLoadFail);
     }
 
     Results test_module(const std::string&                  moduleName,
@@ -2547,13 +2573,12 @@ namespace test_utils {
                         const std::vector<VkSampler>&       samplers,
                         const options&                      opts) {
         return runInExceptionContext(moduleName, "loading module", [&]() {
-            Results result = no_result;
+            Results result;
 
             clspv_utils::kernel_module module(info.device, info.desc_pool, moduleName);
-            result += success;
+            result += Results::sTestSuccess;
 
             std::vector<std::string> entryPoints(module.getEntryPoints());
-            int num_success_kernels = 0;
             for (auto ep : entryPoints) {
                 const auto epTest = std::find_if(kernelTests.begin(), kernelTests.end(),
                                                  [&ep](const kernel_test_map& ktm) {
@@ -2568,10 +2593,10 @@ namespace test_utils {
                 if (0 == num_workgroups.x && 0 == num_workgroups.y) {
                     // WorkgroupDimensions(0, 0) is a sentinel to skip this kernel entirely
                     LOGI("%s/%s: Skipping kernel", moduleName.c_str(), ep.c_str());
+                    result += Results::sKernelLoadSkip;
                 }
                 else {
-
-                    auto kernel_result = test_kernel(
+                    result += test_kernel(
                             module,
                             ep,
                             epTest == kernelTests.end() ? nullptr : epTest->test,
@@ -2579,17 +2604,12 @@ namespace test_utils {
                             info,
                             samplers,
                             opts);
-                    result += kernel_result;
-
-                    if (count_failures(kernel_result) == 0 && count_successes(kernel_result) > 0) {
-                        ++num_success_kernels;
-                    }
                 }
             }
 
-            LOGI("%s: %d/%d kernel successes",
+            LOGI("%s: %u/%d kernel successes",
                  moduleName.c_str(),
-                 num_success_kernels,
+                 result.mNumKernelLoadSuccess,
                  (int)entryPoints.size());
 
             return result;
@@ -2621,7 +2641,7 @@ test_utils::Results test_readlocalsize(const clspv_utils::kernel_module& module,
              std::get<0>(observed), std::get<1>(observed), std::get<2>(observed));
     }
 
-    return (success ? std::make_pair(1, 0) : std::make_pair(0, 1));
+    return (success ? test_utils::Results::sTestSuccess : test_utils::Results::sTestFailure);
 };
 
 template <typename PixelType>
@@ -2671,7 +2691,7 @@ test_utils::Results test_fill(const clspv_utils::kernel_module&     module,
 
     dst_buffer.reset();
 
-    return (success ? test_utils::success : std::make_pair(0, 1));
+    return (success ? test_utils::Results::sTestSuccess : test_utils::Results::sTestFailure);
 }
 
 test_utils::Results test_fill_series(const clspv_utils::kernel_module&  module,
@@ -2754,7 +2774,7 @@ test_utils::Results test_copytoimage(const clspv_utils::kernel_module&  module,
     dstImage.reset();
     src_buffer.reset();
 
-    return (success ? test_utils::success : std::make_pair(0, 1));
+    return (success ? test_utils::Results::sTestSuccess : test_utils::Results::sTestFailure);
 }
 
 template <typename ImagePixelType>
@@ -2865,7 +2885,7 @@ test_utils::Results test_copyfromimage(const clspv_utils::kernel_module&    modu
     srcImage.reset();
     dst_buffer.reset();
 
-    return (success ? test_utils::success : test_utils::failure);
+    return (success ? test_utils::Results::sTestSuccess : test_utils::Results::sTestFailure);
 }
 
 template <typename ImagePixelType>
@@ -3008,7 +3028,7 @@ test_utils::Results run_all_tests(const sample_info& info, const std::vector<VkS
             false   // logCorrect
     };
 
-    auto test_results = test_utils::no_result;
+    test_utils::Results test_results;
 
     for (auto m : module_tests) {
         test_results += test_utils::test_module(m.name, m.kernelTests, info, samplers, opts);
@@ -3098,9 +3118,12 @@ int sample_main(int argc, char *argv[]) {
     destroy_device(info);
     destroy_instance(info);
 
-    LOGI("Complete! %d tests passed. %d tests failed",
-         test_utils::count_successes(test_results),
-         test_utils::count_failures(test_results));
+    LOGI("Complete! %d tests passed. %d tests failed. %d kernels loaded, %d kernels skipped, %d kernels failed",
+         test_results.mNumTestSuccess,
+         test_results.mNumTestFail,
+         test_results.mNumKernelLoadSuccess,
+         test_results.mNumKernelLoadSkip,
+         test_results.mNumKernelLoadFail);
 
     return 0;
 }
